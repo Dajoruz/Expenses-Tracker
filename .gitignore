@@ -1,0 +1,20 @@
+# Base de datos
+*.db
+*.sqlite
+*.sqlite3
+
+# Archivos compilados de Python
+*.pyc
+__pycache__/
+
+# Variables de entorno (si usas .env)
+.env
+
+# Archivos de log
+*.log
+
+# Configuración local (por ejemplo, si tienes config personal)
+instance/
+# Entorno virtual
+.venv/
+.gitignore
