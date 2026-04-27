@@ -611,10 +611,39 @@ select.finput option{background:var(--bg3)}
             </div>
           </div>
 
-          <!-- Couple monthly chart -->
+          <!-- Couple monthly chart - all expenses -->
           <div class="card">
             <div class="card-hdr"><span class="card-title">Couple Spending / Month</span></div>
             <div class="chart-wrap-duo"><canvas id="coupleChart"></canvas></div>
+          </div>
+
+          <!-- Couple TAGGED expenses only -->
+          <div class="couple-banner" style="margin-bottom:10px;margin-top:4px">
+            <div class="couple-banner-title">💑 Gastos Compartidos · Este Mes</div>
+            <div class="couple-grid">
+              <div class="couple-person">
+                <div class="couple-name" id="dashMyNameT">You</div>
+                <div class="couple-val" id="dashMyCoupleTotal">$0</div>
+              </div>
+              <div class="couple-sep">+</div>
+              <div class="couple-person">
+                <div class="couple-name" id="dashPartnerNameT">Partner</div>
+                <div class="couple-val" id="dashPartnerCoupleTotal">$0</div>
+              </div>
+            </div>
+            <div class="couple-combined">
+              <div class="couple-combined-lbl">Total gastos de pareja este mes</div>
+              <div class="couple-combined-val" id="dashCombinedCouple">/bin/sh.00</div>
+            </div>
+          </div>
+
+          <!-- Couple tagged monthly chart -->
+          <div class="card">
+            <div class="card-hdr">
+              <span class="card-title">Gastos de Pareja / Mes</span>
+              <span style="font-size:10px;font-family:var(--mono);color:var(--violet)">solo splits</span>
+            </div>
+            <div class="chart-wrap-duo"><canvas id="coupleTaggedChart"></canvas></div>
           </div>
         </div>
 
@@ -725,10 +754,15 @@ select.finput option{background:var(--bg3)}
                   <label class="flabel">Partner's username</label>
                   <input class="finput" id="sCouple" placeholder="partner_username" autocorrect="off" autocapitalize="none">
                 </div>
+                <div class="fgroup">
+                  <label class="flabel">Partner's Password (required to confirm)</label>
+                  <input class="finput" id="sCouplePass" type="password" placeholder="Partner must confirm with their password">
+                </div>
+                <div class="form-error" id="coupleErr"></div>
                 <p style="font-size:11px;color:var(--text3);font-family:var(--mono)">
-                  When active, toggling "Split expense" will automatically add your partner's half to their account.
+                  Tu pareja debe ingresar su contraseña para confirmar el vínculo. Al activar "Split expense" se agregará automáticamente la mitad a su cuenta.
                 </p>
-                <button class="btn-save" onclick="saveCouple()">Save Partner</button>
+                <button class="btn-save" onclick="saveCouple()">Confirm &amp; Save Partner</button>
               </div>
             </div>
           </div>
@@ -796,7 +830,7 @@ select.finput option{background:var(--bg3)}
 // ─── State ─────────────────────────────────────────────────────────────────
 const S = {
   user: null,
-  charts: { week: null, cat: null, month: null, couple: null },
+  charts: { week: null, cat: null, month: null, couple: null, coupleTagged: null },
   currentView: 'main',
   histView: '7days',
   delMode: false,
@@ -901,7 +935,7 @@ async function doLogout() {
   await api('POST', '/api/auth/logout');
   S.user = null;
   Object.values(S.charts).forEach(c => c && c.destroy());
-  S.charts = { week:null, cat:null, month:null, couple:null };
+  S.charts = { week:null, cat:null, month:null, couple:null, coupleTagged:null };
   closeSidebar();
   show('authScreen');
 }
@@ -1037,8 +1071,8 @@ async function addExpense() {
   const isDivided = document.getElementById('divToggle').checked;
 
   if (!article)  { toast('Article is required','err'); return; }
-  if (!category) { toast('Select a category','err'); return; }
   if (!amount||parseFloat(amount)<=0) { toast('Enter a valid amount','err'); return; }
+  // Si no se elige categoría, el backend asigna "Other" automáticamente
 
   const btn = document.getElementById('addBtn');
   btn.disabled=true; btn.innerHTML='<div class="spin" style="margin:0 auto"></div>';
@@ -1251,51 +1285,60 @@ function renderCoupleDash(data) {
   if (!data.couple) { el.style.display='none'; return; }
   el.style.display='';
   const c = data.couple;
-  document.getElementById('dashMyName').textContent      = c.my_name;
-  document.getElementById('dashMyTotal').textContent     = '$'+c.my_total.toFixed(2);
-  document.getElementById('dashPartnerName').textContent = c.partner_name;
-  document.getElementById('dashPartnerTotal').textContent= '$'+c.partner_total.toFixed(2);
-  document.getElementById('dashCombined').textContent    = '$'+c.combined.toFixed(2);
+
+  // All expenses
+  document.getElementById('dashMyName').textContent       = c.my_name;
+  document.getElementById('dashMyTotal').textContent      = '$'+c.my_total.toFixed(2);
+  document.getElementById('dashPartnerName').textContent  = c.partner_name;
+  document.getElementById('dashPartnerTotal').textContent = '$'+c.partner_total.toFixed(2);
+  document.getElementById('dashCombined').textContent     = '$'+c.combined.toFixed(2);
+
+  // Couple-tagged section
+  document.getElementById('dashMyNameT').textContent            = c.my_name;
+  document.getElementById('dashMyCoupleTotal').textContent      = '$'+(c.my_couple_total||0).toFixed(2);
+  document.getElementById('dashPartnerNameT').textContent       = c.partner_name;
+  document.getElementById('dashPartnerCoupleTotal').textContent = '$'+(c.partner_couple_total||0).toFixed(2);
+  document.getElementById('dashCombinedCouple').textContent     = '$'+(c.combined_couple||0).toFixed(2);
+
+  const sharedOpts = {
+    responsive:true, maintainAspectRatio:false, animation:{duration:600},
+    plugins:{
+      legend:{display:true,position:'top',labels:{color:'#9090a8',font:{family:'JetBrains Mono',size:10},boxWidth:10,padding:12}},
+      tooltip:{backgroundColor:'#18181f',borderColor:'rgba(255,255,255,.1)',borderWidth:1,
+        bodyColor:'#e8e8f0',bodyFont:{family:'JetBrains Mono',size:12},
+        callbacks:{label:ctx=>` $${ctx.parsed.y.toFixed(2)}`}},
+    },
+    scales:{
+      x:{grid:{display:false},ticks:{color:'#55556a',font:{family:'JetBrains Mono',size:10}},border:{display:false}},
+      y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#55556a',font:{family:'JetBrains Mono',size:10},callback:v=>'$'+v.toFixed(0)},border:{display:false}},
+    },
+  };
 
   if (S.charts.couple) S.charts.couple.destroy();
-  const ctx = document.getElementById('coupleChart').getContext('2d');
-  S.charts.couple = new Chart(ctx, {
+  S.charts.couple = new Chart(document.getElementById('coupleChart').getContext('2d'), {
     type:'bar',
     data:{
-      labels: c.monthly.map(m=>m.month),
+      labels:c.monthly.map(m=>m.month),
       datasets:[
-        {
-          label: c.my_name,
-          data: c.monthly.map(m=>m.my_total),
-          backgroundColor:'rgba(180,79,255,.7)',
-          borderColor:'#b44fff', borderWidth:1, borderRadius:4,
-        },
-        {
-          label: c.partner_name,
-          data: c.monthly.map(m=>m.partner_total),
-          backgroundColor:'rgba(0,212,255,.5)',
-          borderColor:'#00d4ff', borderWidth:1, borderRadius:4,
-        },
+        {label:c.my_name,     data:c.monthly.map(m=>m.my_total),      backgroundColor:'rgba(180,79,255,.7)',borderColor:'#b44fff',borderWidth:1,borderRadius:4},
+        {label:c.partner_name,data:c.monthly.map(m=>m.partner_total), backgroundColor:'rgba(0,212,255,.5)', borderColor:'#00d4ff',borderWidth:1,borderRadius:4},
       ],
     },
-    options:{
-      responsive:true, maintainAspectRatio:false, animation:{duration:600},
-      plugins:{
-        legend:{
-          display:true, position:'top',
-          labels:{color:'#9090a8',font:{family:'JetBrains Mono',size:10},boxWidth:10,padding:12},
-        },
-        tooltip:{
-          backgroundColor:'#18181f', borderColor:'rgba(255,255,255,.1)', borderWidth:1,
-          bodyColor:'#e8e8f0', bodyFont:{family:'JetBrains Mono',size:12},
-          callbacks:{label:c=>` $${c.parsed.y.toFixed(2)}`},
-        },
-      },
-      scales:{
-        x:{grid:{display:false},ticks:{color:'#55556a',font:{family:'JetBrains Mono',size:10}},border:{display:false},stacked:false},
-        y:{grid:{color:'rgba(255,255,255,.04)'},ticks:{color:'#55556a',font:{family:'JetBrains Mono',size:10},callback:v=>'$'+v.toFixed(0)},border:{display:false}},
-      },
+    options:sharedOpts,
+  });
+
+  if (S.charts.coupleTagged) S.charts.coupleTagged.destroy();
+  const tagged = c.couple_tagged_monthly||[];
+  S.charts.coupleTagged = new Chart(document.getElementById('coupleTaggedChart').getContext('2d'), {
+    type:'bar',
+    data:{
+      labels:tagged.map(m=>m.month),
+      datasets:[
+        {label:c.my_name,     data:tagged.map(m=>m.my_total),      backgroundColor:'rgba(180,79,255,.6)',borderColor:'#b44fff',borderWidth:1,borderRadius:4},
+        {label:c.partner_name,data:tagged.map(m=>m.partner_total), backgroundColor:'rgba(0,255,136,.4)', borderColor:'#00ff88',borderWidth:1,borderRadius:4},
+      ],
     },
+    options:sharedOpts,
   });
 }
 
@@ -1428,13 +1471,24 @@ async function saveAccount() {
 }
 
 async function saveCouple() {
-  const data = await api('PUT','/api/settings',{
-    couple_username: document.getElementById('sCouple').value.trim(),
-  });
-  if (data.error){ toast(data.error,'err'); return; }
+  const partner_username = document.getElementById('sCouple').value.trim();
+  const partner_password = document.getElementById('sCouplePass').value;
+  const errEl = document.getElementById('coupleErr');
+  errEl.classList.remove('on');
+
+  if (partner_username && !partner_password) {
+    errEl.textContent = 'Ingresa la contraseña de tu pareja para confirmar';
+    errEl.classList.add('on');
+    return;
+  }
+
+  const data = await api('POST','/api/settings/couple',{partner_username, partner_password});
+  if (data.error){ errEl.textContent=data.error; errEl.classList.add('on'); return; }
   S.user = data.user;
+  document.getElementById('sCouplePass').value = '';
   updateSidebar();
-  toast('Partner saved ✓');
+  updateCoupleHint();
+  toast(partner_username ? '✓ Pareja confirmada 💑' : 'Pareja desvinculada');
 }
 
 async function changePassword() {
@@ -1458,7 +1512,7 @@ async function deleteAccount() {
   if (data.error){ toast(data.error,'err'); return; }
   S.user=null;
   Object.values(S.charts).forEach(c=>c&&c.destroy());
-  S.charts={week:null,cat:null,month:null,couple:null};
+  S.charts={week:null,cat:null,month:null,couple:null,coupleTagged:null};
   show('authScreen');
   toast('Account deleted','info');
 }

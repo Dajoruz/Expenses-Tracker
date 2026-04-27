@@ -279,7 +279,7 @@ def create_expense(user):
     is_divided  = bool(d.get('is_divided', False))
 
     if not article:  return jsonify({'error': 'Article required'}), 400
-    if not category: return jsonify({'error': 'Category required'}), 400
+    if not category: category = 'Other'  # default cuando no se selecciona
     try:
         amt = round(float(amount), 2)
         if amt <= 0: raise ValueError
@@ -494,7 +494,14 @@ def stats_dashboard(user):
             my_total = round(sum(e.eff for e in month_exps), 2)
             p_total  = round(sum(e.eff for e in p_month_exps), 2)
 
+            # Solo gastos taggeados como pareja
+            my_couple_exps     = [e for e in month_exps   if e.is_couple_expense]
+            p_couple_exps      = [e for e in p_month_exps if e.is_couple_expense]
+            my_couple_total    = round(sum(e.eff for e in my_couple_exps), 2)
+            p_couple_total     = round(sum(e.eff for e in p_couple_exps),  2)
+
             couple_monthly = []
+            couple_tagged_monthly = []
             for m in range(1, 13):
                 fd      = date(year, m, 1)
                 ld      = date(year, m, monthrange(year, m)[1])
@@ -505,14 +512,23 @@ def stats_dashboard(user):
                     'my_total':      round(sum(e.eff for e in my_exps), 2),
                     'partner_total': round(sum(e.eff for e in p_exps),  2),
                 })
+                couple_tagged_monthly.append({
+                    'month':         fd.strftime('%b'),
+                    'my_total':      round(sum(e.eff for e in my_exps if e.is_couple_expense), 2),
+                    'partner_total': round(sum(e.eff for e in p_exps  if e.is_couple_expense), 2),
+                })
 
             couple = {
-                'my_name':      user.display_name    or user.username,
-                'partner_name': partner.display_name or partner.username,
-                'my_total':     my_total,
-                'partner_total': p_total,
-                'combined':     round(my_total + p_total, 2),
-                'monthly':      couple_monthly,
+                'my_name':               user.display_name    or user.username,
+                'partner_name':          partner.display_name or partner.username,
+                'my_total':              my_total,
+                'partner_total':         p_total,
+                'combined':              round(my_total + p_total, 2),
+                'monthly':               couple_monthly,
+                'my_couple_total':       my_couple_total,
+                'partner_couple_total':  p_couple_total,
+                'combined_couple':       round(my_couple_total + p_couple_total, 2),
+                'couple_tagged_monthly': couple_tagged_monthly,
             }
 
     # Total owed to user (current month, couple expenses)
@@ -544,7 +560,7 @@ def stats_history(user):
     groups = []
 
     if view == '7days':
-        for i in range(6, -1, -1):
+        for i in range(7):          # i=0 → hoy, i=6 → hace 6 días
             d    = date.today() - timedelta(days=i)
             exps = Expense.query.filter_by(user_id=user.id, expense_date=d, is_deleted=False)\
                                 .order_by(Expense.created_at.desc()).all()
@@ -578,9 +594,10 @@ def stats_history(user):
             })
             week_start  = week_end + timedelta(days=1)
             week_num   += 1
+        groups = list(reversed(groups))   # semana más reciente primero
 
     elif view == 'year':
-        for m in range(1, 13):
+        for m in range(12, 0, -1):  # diciembre → enero
             first = date(ref.year, m, 1)
             last  = date(ref.year, m, monthrange(ref.year, m)[1])
             exps  = Expense.query.filter(
@@ -635,6 +652,34 @@ def update_settings(user):
         except: pass
     db.session.commit()
     return jsonify({'status': 'success', 'user': user.to_dict()})
+
+@app.route('/api/settings/couple', methods=['POST'])
+@require_auth
+def set_couple(user):
+    """Registra pareja con validación de contraseña del partner."""
+    d                = request.get_json()
+    partner_username = (d.get('partner_username') or '').strip().lower()
+    partner_password = d.get('partner_password') or ''
+
+    if not partner_username:
+        # Limpiar pareja
+        user.couple_username = None
+        db.session.commit()
+        return jsonify({'status': 'success', 'user': user.to_dict()})
+
+    if partner_username == user.username:
+        return jsonify({'error': 'No puedes ponerte a ti mismo como pareja'}), 400
+
+    partner = User.query.filter_by(username=partner_username).first()
+    if not partner:
+        return jsonify({'error': 'Username del partner no encontrado'}), 404
+    if not check_password_hash(partner.password_hash, partner_password):
+        return jsonify({'error': 'Contraseña del partner incorrecta'}), 401
+
+    user.couple_username = partner_username
+    db.session.commit()
+    return jsonify({'status': 'success', 'user': user.to_dict()})
+
 
 @app.route('/api/settings/password', methods=['PUT'])
 @require_auth
