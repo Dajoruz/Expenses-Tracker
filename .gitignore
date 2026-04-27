@@ -17,3 +17,6 @@ __pycache__/
 instance/
 # Entorno virtual
 .venv/
+
+#developer Tools skiped
+developerTools/
