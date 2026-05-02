@@ -81,6 +81,8 @@ class Expense(db.Model):
     amount_owed_to_you = db.Column(db.Float, default=0.0)  # partner's debt to you
     is_couple_expense  = db.Column(db.Boolean, default=False)
     partner_expense_id = db.Column(db.String(36))     # link to partner's mirrored record
+    is_payed           = db.Column(db.Boolean, default=False)
+    expense_time       = db.Column(db.String(8), default='12:00:00')
     created_at         = db.Column(db.DateTime, default=datetime.utcnow)
     created_by_ip      = db.Column(db.String(45))
     is_deleted         = db.Column(db.Boolean, default=False)
@@ -107,7 +109,28 @@ class Expense(db.Model):
             'amount_owed_to_you': self.amount_owed_to_you or 0,
             'is_couple_expense':  bool(self.is_couple_expense),
             'partner_expense_id': self.partner_expense_id,
+            'is_payed':           bool(self.is_payed),
+            'expense_time':       self.expense_time or '12:00:00',
             'created_at':         self.created_at.isoformat(),
+        }
+
+
+class UserSettings(db.Model):
+    __tablename__       = 'user_settings'
+    id                  = db.Column(db.String(36), primary_key=True,
+                                    default=lambda: str(uuid.uuid4()))
+    user_id             = db.Column(db.String(36), db.ForeignKey('users.id'),
+                                    nullable=False, unique=True)
+    enable_description  = db.Column(db.Boolean, default=False)
+    enable_date_picker  = db.Column(db.Boolean, default=False)
+    created_at          = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at          = db.Column(db.DateTime, default=datetime.utcnow,
+                                    onupdate=datetime.utcnow)
+
+    def to_dict(self):
+        return {
+            'enable_description': bool(self.enable_description),
+            'enable_date_picker': bool(self.enable_date_picker),
         }
 
 
@@ -120,6 +143,8 @@ with app.app_context():
         "ALTER TABLE expenses ADD COLUMN amount_owed_to_you REAL DEFAULT 0",
         "ALTER TABLE expenses ADD COLUMN is_couple_expense BOOLEAN DEFAULT 0",
         "ALTER TABLE expenses ADD COLUMN partner_expense_id VARCHAR(36)",
+        "ALTER TABLE expenses ADD COLUMN is_payed BOOLEAN DEFAULT 0",
+        "ALTER TABLE expenses ADD COLUMN expense_time VARCHAR(8) DEFAULT '12:00:00'",
     ]
     with db.engine.connect() as _conn:
         for _sql in _new_cols:
@@ -291,6 +316,17 @@ def create_expense(user):
     except:
         parsed_date = date.today()
 
+    # Si se ingresa una fecha distinta a hoy, fijar hora a mediodía
+    raw_time = (d.get('expense_time') or '').strip()
+    if raw_time:
+        try:
+            datetime.strptime(raw_time, '%H:%M:%S')
+            exp_time = raw_time
+        except:
+            exp_time = '12:00:00'
+    else:
+        exp_time = '12:00:00' if parsed_date != date.today() else datetime.utcnow().strftime('%H:%M:%S')
+
     # Couple mode: only active when is_divided + partner is configured
     is_couple = is_divided and bool(user.couple_username)
 
@@ -301,6 +337,7 @@ def create_expense(user):
         amount             = amt,
         description        = description[:250] if description else None,
         expense_date       = parsed_date,
+        expense_time       = exp_time,
         is_divided         = is_divided,
         divided_count      = 2 if is_divided else 1,
         amount_paid        = amt if is_couple else None,
@@ -326,6 +363,7 @@ def create_expense(user):
                 amount             = round(amt / 2, 2),   # partner's share
                 description        = p_desc[:250],
                 expense_date       = parsed_date,
+                expense_time       = exp_time,
                 is_divided         = False,
                 divided_count      = 1,
                 amount_paid        = 0.0,
@@ -485,6 +523,18 @@ def stats_dashboard(user):
             'is_today': d == today,
         })
 
+    # Last 30 days (continuous line chart)
+    last_30_days = []
+    for i in range(29, -1, -1):
+        d    = today - timedelta(days=i)
+        exps = Expense.query.filter_by(user_id=user.id, expense_date=d, is_deleted=False).all()
+        last_30_days.append({
+            'date':     d.isoformat(),
+            'label':    d.strftime('%d/%m'),
+            'total':    round(sum(e.eff for e in exps), 2),
+            'is_today': d == today,
+        })
+
     # Couple section
     couple = None
     if user.couple_username:
@@ -531,13 +581,24 @@ def stats_dashboard(user):
                 'couple_tagged_monthly': couple_tagged_monthly,
             }
 
-    # Total owed to user (current month, couple expenses)
-    owed = round(sum(e.amount_owed_to_you or 0 for e in month_exps if e.is_couple_expense), 2)
+    # Total owed to user (current month, couple expenses, NO pagados todavía)
+    owed = round(sum(
+        e.amount_owed_to_you or 0
+        for e in month_exps
+        if e.is_couple_expense and not e.is_payed
+    ), 2)
+
+    # Estado de pago de pareja (mes actual)
+    if couple:
+        unpaid_couple = [e for e in month_exps if e.is_couple_expense and not e.is_payed]
+        couple['paid_this_month'] = (len(unpaid_couple) == 0)
+        couple['owed_to_me']      = owed
 
     return jsonify({
         'by_category':   by_category,
         'monthly':       monthly,
         'week':          week_days,
+        'last_30_days':  last_30_days,
         'couple':        couple,
         'month_total':   round(sum(e.eff for e in month_exps), 2),
         'year_total':    round(sum(e.eff for e in year_exps),  2),
@@ -573,31 +634,36 @@ def stats_history(user):
             })
 
     elif view == 'month':
-        year2, month2 = ref.year, ref.month
-        first         = date(year2, month2, 1)
-        last          = date(year2, month2, monthrange(year2, month2)[1])
-        week_start, week_num = first, 1
-        while week_start <= last:
-            week_end = min(week_start + timedelta(days=6), last)
-            exps     = Expense.query.filter(
+        # Semana actual + 4 anteriores (ordenadas: actual primero)
+        today2 = date.today()
+        # lunes de la semana actual
+        current_week_start = today2 - timedelta(days=today2.weekday())
+        for offset in range(0, 5):  # 0 = actual, 1 = -1 semana, ... 4 = -4 semanas
+            wstart = current_week_start - timedelta(weeks=offset)
+            wend   = wstart + timedelta(days=6)
+            exps   = Expense.query.filter(
                 Expense.user_id      == user.id,
-                Expense.expense_date >= week_start,
-                Expense.expense_date <= week_end,
+                Expense.expense_date >= wstart,
+                Expense.expense_date <= wend,
                 Expense.is_deleted   == False,
             ).order_by(Expense.expense_date.desc(), Expense.created_at.desc()).all()
+            label = ('This week' if offset == 0
+                     else f'{offset} week ago' if offset == 1
+                     else f'{offset} weeks ago')
             groups.append({
-                'label':      f'Week {week_num}  ·  {week_start.strftime("%d")}–{week_end.strftime("%d %b")}',
-                'date_start': week_start.isoformat(),
-                'date_end':   week_end.isoformat(),
+                'label':      f'{label}  ·  {wstart.strftime("%d %b")}–{wend.strftime("%d %b")}',
+                'date_start': wstart.isoformat(),
+                'date_end':   wend.isoformat(),
                 'total':      round(sum(e.eff for e in exps), 2),
                 'expenses':   [e.to_dict() for e in exps],
+                'is_current': offset == 0,
             })
-            week_start  = week_end + timedelta(days=1)
-            week_num   += 1
-        groups = list(reversed(groups))   # semana más reciente primero
 
     elif view == 'year':
-        for m in range(12, 0, -1):  # diciembre → enero
+        # Mes actual primero, luego mes anterior, ... hasta enero
+        today2 = date.today()
+        current_m = today2.month if ref.year == today2.year else 12
+        for m in range(current_m, 0, -1):
             first = date(ref.year, m, 1)
             last  = date(ref.year, m, monthrange(ref.year, m)[1])
             exps  = Expense.query.filter(
@@ -607,11 +673,12 @@ def stats_history(user):
                 Expense.is_deleted   == False,
             ).order_by(Expense.expense_date.desc()).all()
             groups.append({
-                'label':    first.strftime('%B %Y'),
-                'month':    m,
-                'year':     ref.year,
-                'total':    round(sum(e.eff for e in exps), 2),
-                'expenses': [e.to_dict() for e in exps],
+                'label':      first.strftime('%B %Y'),
+                'month':      m,
+                'year':       ref.year,
+                'total':      round(sum(e.eff for e in exps), 2),
+                'expenses':   [e.to_dict() for e in exps],
+                'is_current': (m == today2.month and ref.year == today2.year),
             })
 
     return jsonify({'view': view, 'groups': groups})
@@ -702,10 +769,84 @@ def delete_account(user):
     if not check_password_hash(user.password_hash, d.get('password', '')):
         return jsonify({'error': 'Incorrect password'}), 400
     Expense.query.filter_by(user_id=user.id).delete()
+    UserSettings.query.filter_by(user_id=user.id).delete()
     db.session.delete(user)
     db.session.commit()
     session.clear()
     return jsonify({'status': 'success'})
+
+# ── User Settings (preferencias por usuario) ─────────────────────────────────
+
+def _get_or_create_settings(user):
+    s = UserSettings.query.filter_by(user_id=user.id).first()
+    if not s:
+        s = UserSettings(user_id=user.id)
+        db.session.add(s)
+        db.session.commit()
+    return s
+
+@app.route('/api/settings/user-settings', methods=['GET'])
+@require_auth
+def get_user_settings(user):
+    s = _get_or_create_settings(user)
+    return jsonify(s.to_dict())
+
+@app.route('/api/settings/user-settings', methods=['PUT'])
+@require_auth
+def update_user_settings(user):
+    d = request.get_json() or {}
+    s = _get_or_create_settings(user)
+    if 'enable_description' in d:
+        s.enable_description = bool(d['enable_description'])
+    if 'enable_date_picker' in d:
+        s.enable_date_picker = bool(d['enable_date_picker'])
+    s.updated_at = datetime.utcnow()
+    db.session.commit()
+    return jsonify({'status': 'success', 'settings': s.to_dict()})
+
+# ── Mark couple expenses as paid ──────────────────────────────────────────────
+
+@app.route('/api/expenses/mark-paid', methods=['POST'])
+@require_auth
+def mark_couple_paid(user):
+    """
+    Marca como pagados los gastos de pareja (resetea la deuda).
+    Body opcional:
+      { "scope": "month" | "all" }   default: "month"
+      { "expense_id": "<uuid>" }     marca uno específico
+    """
+    d = request.get_json() or {}
+    expense_id = d.get('expense_id')
+    scope      = (d.get('scope') or 'month').lower()
+
+    if expense_id:
+        e = Expense.query.filter_by(id=expense_id, user_id=user.id).first()
+        if not e or not e.is_couple_expense:
+            return jsonify({'error': 'Couple expense not found'}), 404
+        e.is_payed = True
+        e.amount_owed_to_you = 0.0
+        db.session.commit()
+        return jsonify({'status': 'success', 'paid': 1})
+
+    q = Expense.query.filter(
+        Expense.user_id          == user.id,
+        Expense.is_couple_expense == True,
+        Expense.is_deleted       == False,
+        Expense.is_payed         == False,
+    )
+
+    if scope == 'month':
+        today = date.today()
+        first = date(today.year, today.month, 1)
+        last  = date(today.year, today.month, monthrange(today.year, today.month)[1])
+        q = q.filter(Expense.expense_date >= first, Expense.expense_date <= last)
+
+    count = q.update(
+        {'is_payed': True, 'amount_owed_to_you': 0.0},
+        synchronize_session=False,
+    )
+    db.session.commit()
+    return jsonify({'status': 'success', 'paid': count})
 
 # ── Misc ──────────────────────────────────────────────────────────────────────
 

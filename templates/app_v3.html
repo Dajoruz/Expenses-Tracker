@@ -98,9 +98,27 @@ select.finput option{background:var(--bg3)}
 .sb-item.active{background:rgba(180,79,255,.12);color:var(--violet)}
 .sb-item .sb-icon{font-size:18px;width:22px;flex-shrink:0}
 .sb-footer{padding:12px 10px;border-top:1px solid var(--border)}
+.sb-pref-row{display:flex;align-items:center;justify-content:space-between;
+  padding:10px 12px;margin-bottom:6px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--r)}
+.sb-pref-lbl{font-size:12px;color:var(--text2);font-family:var(--mono)}
 .sb-logout{display:flex;align-items:center;gap:12px;padding:12px;border-radius:var(--r);
   cursor:pointer;color:var(--text3);font-size:14px;transition:all .2s;border:none;background:none;width:100%}
 .sb-logout:hover{color:#ff4444;background:rgba(255,68,68,.08)}
+
+/* ── Couple page ── */
+.couple-status-card{background:linear-gradient(135deg,rgba(180,79,255,.08),rgba(0,212,255,.08));
+  border:1px solid rgba(180,79,255,.25);border-radius:var(--r2);padding:18px;margin-bottom:14px;text-align:center}
+.couple-status-lbl{font-size:10px;letter-spacing:3px;color:var(--violet);text-transform:uppercase;font-family:var(--mono)}
+.couple-status-amt{font-size:42px;font-weight:800;letter-spacing:-2px;font-family:var(--mono);margin-top:6px;line-height:1}
+.couple-status-amt.pending{color:var(--orange)}
+.couple-status-amt.paid{color:var(--green)}
+.couple-status-sub{font-size:12px;color:var(--text3);font-family:var(--mono);margin-top:6px}
+.btn-paid{background:linear-gradient(135deg,var(--green),#00cc6a);color:#000;
+  padding:14px 20px;font-size:15px;font-weight:800;letter-spacing:1.5px;border-radius:var(--r);
+  width:100%;border:none;cursor:pointer;transition:all .2s;
+  box-shadow:0 4px 20px rgba(0,255,136,.25);margin-top:14px;text-transform:uppercase}
+.btn-paid:hover{box-shadow:0 6px 28px rgba(0,255,136,.45);transform:translateY(-1px)}
+.btn-paid:disabled{opacity:.5;cursor:not-allowed;background:var(--bg4);color:var(--text3);box-shadow:none}
 
 /* Main content */
 #appMain{flex:1;display:flex;flex-direction:column;overflow:hidden;width:100%}
@@ -416,6 +434,9 @@ select.finput option{background:var(--bg3)}
       <button class="sb-item" data-view="dashboard" onclick="navTo('dashboard')">
         <span class="sb-icon">📊</span> Dashboard
       </button>
+      <button class="sb-item" data-view="couple" id="navCouple" style="display:none" onclick="navTo('couple')">
+        <span class="sb-icon">💑</span> Couple
+      </button>
       <button class="sb-item" data-view="history" onclick="navTo('history')">
         <span class="sb-icon">📅</span> History
       </button>
@@ -427,6 +448,14 @@ select.finput option{background:var(--bg3)}
       </button>
     </div>
     <div class="sb-footer">
+      <div class="sb-pref-row" id="dateToggleRow">
+        <span class="sb-pref-lbl">📅 Habilitar fecha</span>
+        <label class="toggle-switch" style="width:36px;height:20px">
+          <input type="checkbox" id="sbDateToggle" onchange="onDateToggleSb()">
+          <div class="toggle-track"></div>
+          <div class="toggle-thumb" style="top:2px;left:2px;width:14px;height:14px"></div>
+        </label>
+      </div>
       <button class="sb-logout" onclick="doLogout()">
         <span style="font-size:16px">🚪</span> Sign Out
       </button>
@@ -450,6 +479,12 @@ select.finput option{background:var(--bg3)}
 
       <!-- ─── MAIN MENU ─── -->
       <div class="view on" id="viewMain">
+
+        <!-- Last 7 Days chart (TOP) -->
+        <div class="card">
+          <div class="card-hdr"><span class="card-title">Last 7 Days</span></div>
+          <div class="chart-wrap"><canvas id="weekChartMain"></canvas></div>
+        </div>
 
         <!-- Today's stats -->
         <div class="daily-card">
@@ -519,9 +554,14 @@ select.finput option{background:var(--bg3)}
                 <div class="your-share" id="yourShare">Your share: $0.00</div>
               </div>
 
-              <div class="fgroup">
+              <div class="fgroup" id="descGroup" style="display:none">
                 <label class="flabel">Description (optional)</label>
                 <input class="finput" id="descInput" placeholder="Notes…" maxlength="250">
+              </div>
+
+              <div class="fgroup" id="dateGroup" style="display:none">
+                <label class="flabel">Date (12:00 PM)</label>
+                <input class="finput" id="dateInput" type="date">
               </div>
 
               <button class="btn-primary" id="addBtn" onclick="addExpense()">+ Add Expense</button>
@@ -545,6 +585,12 @@ select.finput option{background:var(--bg3)}
       <!-- ─── DASHBOARD ─── -->
       <div class="view" id="viewDashboard">
 
+        <!-- 30-day continuous line chart -->
+        <div class="card">
+          <div class="card-hdr"><span class="card-title">Last 30 Days</span><span style="font-size:10px;font-family:var(--mono);color:var(--text3)">trend</span></div>
+          <div class="chart-wrap-lg"><canvas id="last30Chart"></canvas></div>
+        </div>
+
         <!-- Summary stat cards -->
         <div class="dash-section" id="dashMonthLabel">Current Month</div>
         <div class="stat-cards">
@@ -560,23 +606,6 @@ select.finput option{background:var(--bg3)}
           </div>
         </div>
 
-        <!-- Owed to me stat (only if couple) -->
-        <div id="dashOwedCard" style="display:none">
-          <div class="stat-cards" style="grid-template-columns:1fr">
-            <div class="stat-card violet">
-              <div class="stat-card-lbl">💸 Partner Owes You (this month)</div>
-              <div class="stat-card-val" id="dashOwed">$0.00</div>
-              <div class="stat-card-sub">from divided expenses</div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Week chart -->
-        <div class="card">
-          <div class="card-hdr"><span class="card-title">Last 7 Days</span></div>
-          <div class="chart-wrap"><canvas id="weekChart"></canvas></div>
-        </div>
-
         <!-- Category breakdown -->
         <div class="card">
           <div class="card-hdr"><span class="card-title">By Category</span><span style="font-size:10px;font-family:var(--mono);color:var(--text3)" id="dashCatMonthLabel">this month</span></div>
@@ -590,8 +619,21 @@ select.finput option{background:var(--bg3)}
           <div class="chart-wrap-lg"><canvas id="monthChart"></canvas></div>
         </div>
 
-        <!-- Couple comparison (hidden if no couple) -->
-        <div id="coupleDash" style="display:none">
+      </div><!-- /dashboard -->
+
+      <!-- ─── COUPLE ─── -->
+      <div class="view" id="viewCouple">
+
+        <!-- Status / Pagado -->
+        <div class="couple-status-card">
+          <div class="couple-status-lbl">💑 Partner Owes You</div>
+          <div class="couple-status-amt pending" id="coupleOwedAmt">$0.00</div>
+          <div class="couple-status-sub" id="coupleOwedSub">current month · divided expenses</div>
+          <button class="btn-paid" id="btnMarkPaid" onclick="markCouplePaid()">✓ PAGADO</button>
+        </div>
+
+        <!-- Couple comparison -->
+        <div id="coupleSummary">
           <div class="couple-banner" style="margin-bottom:10px">
             <div class="couple-banner-title">💑 Couple · This Month</div>
             <div class="couple-grid">
@@ -611,13 +653,11 @@ select.finput option{background:var(--bg3)}
             </div>
           </div>
 
-          <!-- Couple monthly chart - all expenses -->
           <div class="card">
             <div class="card-hdr"><span class="card-title">Couple Spending / Month</span></div>
             <div class="chart-wrap-duo"><canvas id="coupleChart"></canvas></div>
           </div>
 
-          <!-- Couple TAGGED expenses only -->
           <div class="couple-banner" style="margin-bottom:10px;margin-top:4px">
             <div class="couple-banner-title">💑 Gastos Compartidos · Este Mes</div>
             <div class="couple-grid">
@@ -633,11 +673,10 @@ select.finput option{background:var(--bg3)}
             </div>
             <div class="couple-combined">
               <div class="couple-combined-lbl">Total gastos de pareja este mes</div>
-              <div class="couple-combined-val" id="dashCombinedCouple">/bin/sh.00</div>
+              <div class="couple-combined-val" id="dashCombinedCouple">$0.00</div>
             </div>
           </div>
 
-          <!-- Couple tagged monthly chart -->
           <div class="card">
             <div class="card-hdr">
               <span class="card-title">Gastos de Pareja / Mes</span>
@@ -647,7 +686,7 @@ select.finput option{background:var(--bg3)}
           </div>
         </div>
 
-      </div><!-- /dashboard -->
+      </div><!-- /couple -->
 
       <!-- ─── HISTORY ─── -->
       <div class="view" id="viewHistory">
@@ -746,6 +785,25 @@ select.finput option{background:var(--bg3)}
         </div>
 
         <div class="settings-section">
+          <div class="section-hdr">Preferences</div>
+          <div class="settings-card">
+            <div class="settings-form">
+              <div class="divided-row" style="margin-bottom:10px">
+                <span class="divided-lbl">📝 Habilitar descripción al ingresar un gasto</span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setDescToggle" onchange="onDescriptionToggle()">
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </label>
+              </div>
+              <p style="font-size:11px;color:var(--text3);font-family:var(--mono)">
+                Cuando está activo, aparece un campo de descripción al añadir gastos.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-section">
           <div class="section-hdr">Couple / Split</div>
           <div class="settings-card">
             <div class="settings-form">
@@ -830,11 +888,13 @@ select.finput option{background:var(--bg3)}
 // ─── State ─────────────────────────────────────────────────────────────────
 const S = {
   user: null,
-  charts: { week: null, cat: null, month: null, couple: null, coupleTagged: null },
+  charts: { weekMain: null, last30: null, cat: null, month: null, couple: null, coupleTagged: null },
   currentView: 'main',
   histView: '7days',
   delMode: false,
   finderResults: [],
+  prefs: { enable_description: false, enable_date_picker: false },
+  lastDashData: null,
 };
 
 const CAT = {
@@ -935,18 +995,50 @@ async function doLogout() {
   await api('POST', '/api/auth/logout');
   S.user = null;
   Object.values(S.charts).forEach(c => c && c.destroy());
-  S.charts = { week:null, cat:null, month:null, couple:null, coupleTagged:null };
+  S.charts = { weekMain:null, last30:null, cat:null, month:null, couple:null, coupleTagged:null };
   closeSidebar();
   show('authScreen');
 }
 
 // ─── Enter App ─────────────────────────────────────────────────────────────
-function enterApp() {
+async function enterApp() {
   show('appScreen');
   updateSidebar();
   document.getElementById('hdrDate').textContent =
     new Date().toLocaleDateString('es-MX',{weekday:'short',day:'numeric',month:'short'});
+  await loadUserPrefs();
   navTo('main');
+}
+
+async function loadUserPrefs() {
+  try {
+    const data = await api('GET', '/api/settings/user-settings');
+    S.prefs.enable_description = !!data.enable_description;
+    S.prefs.enable_date_picker = !!data.enable_date_picker;
+  } catch(e) {
+    S.prefs = { enable_description:false, enable_date_picker:false };
+  }
+  applyPrefs();
+}
+
+function applyPrefs() {
+  // Toggle in sidebar
+  const sbDate = document.getElementById('sbDateToggle');
+  if (sbDate) sbDate.checked = S.prefs.enable_date_picker;
+  const setDesc = document.getElementById('setDescToggle');
+  if (setDesc) setDesc.checked = S.prefs.enable_description;
+
+  // Show/hide fields in Add Expense
+  const descGroup = document.getElementById('descGroup');
+  if (descGroup) descGroup.style.display = S.prefs.enable_description ? '' : 'none';
+  const dateGroup = document.getElementById('dateGroup');
+  if (dateGroup) {
+    dateGroup.style.display = S.prefs.enable_date_picker ? '' : 'none';
+    if (S.prefs.enable_date_picker) {
+      const di = document.getElementById('dateInput');
+      if (di && !di.value) di.value = new Date().toISOString().slice(0,10);
+    }
+  }
 }
 
 function updateSidebar() {
@@ -961,6 +1053,9 @@ function updateSidebar() {
   } else {
     badge.style.display = 'none';
   }
+  // Couple tab visibility
+  const navCouple = document.getElementById('navCouple');
+  if (navCouple) navCouple.style.display = u.couple_username ? '' : 'none';
 }
 
 // ─── Sidebar ───────────────────────────────────────────────────────────────
@@ -968,9 +1063,12 @@ function openSidebar()  { document.getElementById('sidebar').classList.add('open
 function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('on'); }
 
 // ─── Navigation ────────────────────────────────────────────────────────────
-const VIEW_TITLES = { main:'Main Menu', dashboard:'Dashboard', history:'History', finder:'Finder', settings:'Settings' };
+const VIEW_TITLES = { main:'Main Menu', dashboard:'Dashboard', couple:'Couple', history:'History', finder:'Finder', settings:'Settings' };
 
 function navTo(view) {
+  // Couple tab guarded by relationship
+  if (view === 'couple' && (!S.user || !S.user.couple_username)) view = 'main';
+
   S.currentView = view;
   closeSidebar();
   document.querySelectorAll('.view').forEach(v => v.classList.remove('on'));
@@ -980,20 +1078,42 @@ function navTo(view) {
 
   if      (view==='main')      loadMain();
   else if (view==='dashboard') loadDashboard();
+  else if (view==='couple')    loadCouple();
   else if (view==='history')   loadHistory(S.histView);
-  else if (view==='finder') {
-    document.getElementById('finderQ').value='';
-    document.getElementById('finderResults').innerHTML='<div class="empty-state">Type to search…</div>';
-  }
+  else if (view==='finder')    loadFinderAll();
   else if (view==='settings')  loadSettings();
 }
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
 
 // ─── Main Menu ─────────────────────────────────────────────────────────────
 async function loadMain() {
+  loadWeekChartMain();
   loadTodayStats();
   loadTodayList();
   loadOwedBanner();
+}
+
+async function loadWeekChartMain() {
+  const data = await api('GET','/api/stats/week');
+  renderWeekChartMain(data.days||[]);
+}
+
+function renderWeekChartMain(days) {
+  if (S.charts.weekMain) S.charts.weekMain.destroy();
+  const ctx = document.getElementById('weekChartMain').getContext('2d');
+  S.charts.weekMain = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels:   days.map(d=>d.label),
+      datasets: [{
+        data:            days.map(d=>d.total),
+        backgroundColor: days.map(d=>d.is_today?'rgba(180,79,255,.9)':'rgba(0,212,255,.4)'),
+        borderColor:     days.map(d=>d.is_today?'#b44fff':'#00d4ff'),
+        borderWidth:1, borderRadius:6, borderSkipped:false,
+      }],
+    },
+    options: { responsive:true, maintainAspectRatio:false, animation:{duration:500,easing:'easeOutQuart'}, ...CHART_DEFAULTS },
+  });
 }
 
 async function loadTodayStats() {
@@ -1067,22 +1187,35 @@ async function addExpense() {
   const article  = document.getElementById('artInput').value.trim();
   const category = document.getElementById('catInput').value;
   const amount   = document.getElementById('amtInput').value;
-  const desc     = document.getElementById('descInput').value.trim();
+  const desc     = S.prefs.enable_description
+                   ? document.getElementById('descInput').value.trim()
+                   : '';
   const isDivided = document.getElementById('divToggle').checked;
 
   if (!article)  { toast('Article is required','err'); return; }
   if (!amount||parseFloat(amount)<=0) { toast('Enter a valid amount','err'); return; }
-  // Si no se elige categoría, el backend asigna "Other" automáticamente
+
+  const payload = {
+    article, category, amount:parseFloat(amount),
+    description:desc, is_divided:isDivided,
+  };
+
+  if (S.prefs.enable_date_picker) {
+    const dv = document.getElementById('dateInput').value;
+    if (dv) {
+      payload.expense_date = dv;
+      payload.expense_time = '12:00:00';
+    }
+  }
 
   const btn = document.getElementById('addBtn');
   btn.disabled=true; btn.innerHTML='<div class="spin" style="margin:0 auto"></div>';
-  const data = await api('POST','/api/expenses',{
-    article, category, amount:parseFloat(amount), description:desc, is_divided:isDivided,
-  });
+  const data = await api('POST','/api/expenses', payload);
   btn.disabled=false; btn.textContent='+ Add Expense';
   if (data.error){ toast(data.error,'err'); return; }
 
-  ['artInput','catInput','amtInput','descInput'].forEach(id=>document.getElementById(id).value='');
+  ['artInput','catInput','amtInput'].forEach(id=>document.getElementById(id).value='');
+  if (document.getElementById('descInput')) document.getElementById('descInput').value='';
   document.getElementById('divToggle').checked=false;
   document.getElementById('divDetails').classList.remove('on');
   document.getElementById('coupleHint').style.display='none';
@@ -1106,9 +1239,11 @@ async function delExp(id, reloadFn) {
 function delExpAndReload(id) {
   const v = S.currentView;
   delExp(id, ()=>{
-    if (v==='main')    { loadTodayStats(); loadTodayList(); }
+    if (v==='main')    { loadTodayStats(); loadTodayList(); loadOwedBanner(); }
     else if (v==='history') loadHistory(S.histView);
     else if (v==='finder')  runSearch();
+    else if (v==='couple')  loadCouple();
+    else if (v==='dashboard') loadDashboard();
   });
 }
 
@@ -1173,11 +1308,11 @@ function pickAc(v){ document.getElementById('artInput').value=v; document.getEle
 // ─── Dashboard ─────────────────────────────────────────────────────────────
 async function loadDashboard() {
   const data = await api('GET', '/api/stats/dashboard');
+  S.lastDashData = data;
   renderDashboardStats(data);
-  renderWeekChart(data.week||[]);
+  renderLast30Chart(data.last_30_days||[]);
   renderCatChart(data.by_category||{}, data.current_month);
   renderMonthChart(data.monthly||[], data.current_year);
-  renderCoupleDash(data);
 }
 
 function renderDashboardStats(data) {
@@ -1187,32 +1322,99 @@ function renderDashboardStats(data) {
   document.getElementById('dashYearName').textContent   = String(data.current_year || '');
   document.getElementById('dashYearLabel').textContent  = String(data.current_year || '');
   document.getElementById('dashCatMonthLabel').textContent = data.current_month || 'this month';
+}
 
-  const owedCard = document.getElementById('dashOwedCard');
-  if (S.user && S.user.couple_username && (data.owed_to_me||0) > 0) {
-    document.getElementById('dashOwed').textContent = '$' + (data.owed_to_me||0).toFixed(2);
-    owedCard.style.display = '';
+function renderLast30Chart(days) {
+  if (S.charts.last30) S.charts.last30.destroy();
+  const ctx = document.getElementById('last30Chart').getContext('2d');
+  S.charts.last30 = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: days.map(d => d.label),
+      datasets: [{
+        data: days.map(d => d.total),
+        borderColor: '#b44fff',
+        backgroundColor: 'rgba(180,79,255,.15)',
+        borderWidth: 2,
+        fill: true,
+        tension: 0.35,
+        pointRadius: days.map(d => d.is_today ? 4 : 0),
+        pointBackgroundColor: '#b44fff',
+        pointBorderColor: '#fff',
+        pointBorderWidth: 1,
+      }],
+    },
+    options: {
+      responsive:true, maintainAspectRatio:false,
+      animation:{duration:600},
+      plugins: {
+        legend:{display:false},
+        tooltip:{
+          backgroundColor:'#18181f',borderColor:'rgba(255,255,255,.1)',borderWidth:1,
+          titleColor:'#9090a8',bodyColor:'#e8e8f0',
+          bodyFont:{family:'JetBrains Mono',size:12},
+          callbacks:{ label: c => ` $${c.parsed.y.toFixed(2)}` },
+        },
+      },
+      scales:{
+        x:{
+          grid:{display:false},
+          ticks:{color:'#55556a',font:{family:'JetBrains Mono',size:9},
+                 maxRotation:0,autoSkip:true,maxTicksLimit:8},
+          border:{display:false},
+        },
+        y:{
+          grid:{color:'rgba(255,255,255,.04)'},
+          ticks:{color:'#55556a',font:{family:'JetBrains Mono',size:10},callback:v=>'$'+v.toFixed(0)},
+          border:{display:false},
+        },
+      },
+    },
+  });
+}
+
+// ─── Couple view ───────────────────────────────────────────────────────────
+async function loadCouple() {
+  if (!S.user || !S.user.couple_username) { navTo('main'); return; }
+  const data = await api('GET', '/api/stats/dashboard');
+  S.lastDashData = data;
+  renderCoupleStatus(data);
+  renderCoupleDash(data);
+}
+
+function renderCoupleStatus(data) {
+  const owed = (data.couple && data.couple.owed_to_me != null)
+               ? data.couple.owed_to_me
+               : (data.owed_to_me || 0);
+  const paid = data.couple ? !!data.couple.paid_this_month : true;
+
+  const amtEl = document.getElementById('coupleOwedAmt');
+  const subEl = document.getElementById('coupleOwedSub');
+  const btn   = document.getElementById('btnMarkPaid');
+
+  amtEl.textContent = '$' + owed.toFixed(2);
+  if (owed > 0 && !paid) {
+    amtEl.classList.remove('paid'); amtEl.classList.add('pending');
+    subEl.textContent = 'pendiente · gastos divididos del mes';
+    btn.disabled = false;
+    btn.textContent = '✓ PAGADO';
   } else {
-    owedCard.style.display = 'none';
+    amtEl.classList.remove('pending'); amtEl.classList.add('paid');
+    subEl.textContent = paid ? '✅ todo está al día este mes' : 'sin deuda este mes';
+    btn.disabled = true;
+    btn.textContent = '✓ AL DÍA';
   }
 }
 
-function renderWeekChart(days) {
-  if (S.charts.week) S.charts.week.destroy();
-  const ctx = document.getElementById('weekChart').getContext('2d');
-  S.charts.week = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels:   days.map(d=>d.label),
-      datasets: [{
-        data:            days.map(d=>d.total),
-        backgroundColor: days.map(d=>d.is_today?'rgba(180,79,255,.9)':'rgba(0,212,255,.4)'),
-        borderColor:     days.map(d=>d.is_today?'#b44fff':'#00d4ff'),
-        borderWidth:1, borderRadius:6, borderSkipped:false,
-      }],
-    },
-    options: { responsive:true, maintainAspectRatio:false, animation:{duration:500,easing:'easeOutQuart'}, ...CHART_DEFAULTS },
-  });
+async function markCouplePaid() {
+  if (!confirm('¿Marcar todos los gastos compartidos del mes como pagados?')) return;
+  const btn = document.getElementById('btnMarkPaid');
+  btn.disabled = true; btn.textContent = '...';
+  const data = await api('POST', '/api/expenses/mark-paid', { scope: 'month' });
+  if (data.error) { toast(data.error,'err'); btn.disabled=false; btn.textContent='✓ PAGADO'; return; }
+  toast(`✅ ${data.paid||0} gasto(s) marcados como pagados`);
+  loadCouple();
+  loadOwedBanner();
 }
 
 function renderCatChart(byCat, monthLabel) {
@@ -1281,7 +1483,8 @@ function renderMonthChart(monthly, year) {
 }
 
 function renderCoupleDash(data) {
-  const el = document.getElementById('coupleDash');
+  const el = document.getElementById('coupleSummary');
+  if (!el) return;
   if (!data.couple) { el.style.display='none'; return; }
   el.style.display='';
   const c = data.couple;
@@ -1357,10 +1560,12 @@ async function loadHistory(view) {
   const groups = data.groups||[];
   if (!groups.length){ el.innerHTML='<div class="empty-state">No expenses found</div>'; return; }
   el.innerHTML = groups.map((g,i)=>{
-    const todayBadge = g.is_today ? '<span class="today-badge">TODAY</span>' : '';
+    const todayBadge = g.is_today ? '<span class="today-badge">TODAY</span>'
+                     : g.is_current ? '<span class="today-badge">CURRENT</span>' : '';
     const emptyNote  = g.expenses.length===0 ? '<div style="padding:12px 16px;font-size:12px;color:var(--text3);font-family:var(--mono)">No expenses</div>' : '';
-    const open       = g.expenses.length>0 && i===0 ? 'on' : '';
-    const arrowOpen  = open ? 'open' : '';
+    // Por defecto TODOS los grupos van expandidos
+    const open      = 'on';
+    const arrowOpen = 'open';
     return `<div class="hist-group">
       <div class="hist-grp-hdr" onclick="toggleGroup(${i})">
         <div><div class="hist-grp-lbl">${g.label} ${todayBadge}</div></div>
@@ -1386,7 +1591,7 @@ function toggleGroup(i) {
 
 // ─── Finder ────────────────────────────────────────────────────────────────
 let searchTimer;
-function onFinderInput(){ clearTimeout(searchTimer); searchTimer=setTimeout(runSearch,300); }
+function onFinderInput(){ clearTimeout(searchTimer); searchTimer=setTimeout(runSearch,250); }
 
 function toggleAdv() {
   const el  = document.getElementById('advFilters');
@@ -1397,8 +1602,16 @@ function toggleAdv() {
     document.getElementById('finderCat').value='';
     document.getElementById('finderFrom').value='';
     document.getElementById('finderTo').value='';
-    runSearch();
   }
+  runSearch();
+}
+
+async function loadFinderAll() {
+  document.getElementById('finderQ').value = '';
+  document.getElementById('finderCat').value = '';
+  document.getElementById('finderFrom').value = '';
+  document.getElementById('finderTo').value = '';
+  await runSearch();
 }
 
 async function runSearch() {
@@ -1406,11 +1619,7 @@ async function runSearch() {
   const cat  = document.getElementById('finderCat').value;
   const from = document.getElementById('finderFrom').value;
   const to   = document.getElementById('finderTo').value;
-  if (!q&&!cat&&!from&&!to){
-    document.getElementById('finderResults').innerHTML='<div class="empty-state">Type to search…</div>';
-    return;
-  }
-  let url = '/api/expenses?limit=100';
+  let url = '/api/expenses?limit=200';
   if (q)    url+=`&q=${encodeURIComponent(q)}`;
   if (cat)  url+=`&category=${encodeURIComponent(cat)}`;
   if (from) url+=`&from=${from}`;
@@ -1421,7 +1630,12 @@ async function runSearch() {
 }
 
 function renderFinderResults() {
-  document.getElementById('finderResults').innerHTML = renderExpList(S.finderResults, S.delMode);
+  const wrap = document.getElementById('finderResults');
+  if (!S.finderResults || S.finderResults.length === 0) {
+    wrap.innerHTML = '<div class="empty-state">No expenses found</div>';
+  } else {
+    wrap.innerHTML = renderExpList(S.finderResults, S.delMode);
+  }
   updateBulkBtn();
 }
 
@@ -1456,6 +1670,8 @@ async function loadSettings() {
   document.getElementById('sCurrency').value    = u.currency||'MXN';
   document.getElementById('sBudget').value      = u.daily_budget||'';
   document.getElementById('sCouple').value      = u.couple_username||'';
+  // Refresh prefs from server in case they changed elsewhere
+  await loadUserPrefs();
 }
 
 async function saveAccount() {
@@ -1512,13 +1728,32 @@ async function deleteAccount() {
   if (data.error){ toast(data.error,'err'); return; }
   S.user=null;
   Object.values(S.charts).forEach(c=>c&&c.destroy());
-  S.charts={week:null,cat:null,month:null,couple:null,coupleTagged:null};
+  S.charts={weekMain:null,last30:null,cat:null,month:null,couple:null,coupleTagged:null};
   show('authScreen');
   toast('Account deleted','info');
 }
 
 function downloadCSV() {
   window.location.href = '/api/export/csv';
+}
+
+// ─── User Preferences (toggles) ────────────────────────────────────────────
+async function onDateToggleSb() {
+  const checked = document.getElementById('sbDateToggle').checked;
+  S.prefs.enable_date_picker = checked;
+  applyPrefs();
+  const data = await api('PUT','/api/settings/user-settings',{enable_date_picker:checked});
+  if (data.error){ toast(data.error,'err'); return; }
+  toast(checked ? 'Fecha activada ✓' : 'Fecha desactivada');
+}
+
+async function onDescriptionToggle() {
+  const checked = document.getElementById('setDescToggle').checked;
+  S.prefs.enable_description = checked;
+  applyPrefs();
+  const data = await api('PUT','/api/settings/user-settings',{enable_description:checked});
+  if (data.error){ toast(data.error,'err'); return; }
+  toast(checked ? 'Descripción activada ✓' : 'Descripción desactivada');
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
