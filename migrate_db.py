@@ -27,6 +27,16 @@ def table_exists(cursor, table):
     return cursor.fetchone() is not None
 
 
+def add_column_safe(cur, table, column, ddl):
+    """ALTER TABLE ... ADD COLUMN ... idempotente."""
+    if column_exists(cur, table, column):
+        print(f"  - {table}.{column}: ya existe (skip)")
+        return False
+    cur.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    print(f"  + {table}.{column}: agregada")
+    return True
+
+
 def migrate():
     print("=" * 60)
     print("XPNS v3.1.0  -  Database Migration")
@@ -42,28 +52,15 @@ def migrate():
     cur = conn.cursor()
 
     try:
-        # 1) Columna is_payed en expenses
-        print("\n[1/3] expenses.is_payed ...", end=" ")
-        if column_exists(cur, 'expenses', 'is_payed'):
-            print("ya existe (skip)")
-        else:
-            cur.execute("ALTER TABLE expenses ADD COLUMN is_payed BOOLEAN DEFAULT 0")
-            print("agregada")
+        # ── 1. expenses: nuevas columnas ────────────────────────────────────
+        print("\n[1] Tabla expenses (columnas nuevas):")
+        add_column_safe(cur, 'expenses', 'is_payed',     "BOOLEAN DEFAULT 0")
+        add_column_safe(cur, 'expenses', 'expense_time', "VARCHAR(8) DEFAULT '12:00:00'")
 
-        # 2) Columna expense_time en expenses
-        print("[2/3] expenses.expense_time ...", end=" ")
-        if column_exists(cur, 'expenses', 'expense_time'):
-            print("ya existe (skip)")
-        else:
-            cur.execute(
-                "ALTER TABLE expenses ADD COLUMN expense_time VARCHAR(8) DEFAULT '12:00:00'"
-            )
-            print("agregada")
-
-        # 3) Tabla user_settings
-        print("[3/3] tabla user_settings ...", end=" ")
+        # ── 2. user_settings: tabla + columnas ──────────────────────────────
+        print("\n[2] Tabla user_settings:")
         if table_exists(cur, 'user_settings'):
-            print("ya existe (skip)")
+            print("  - user_settings: ya existe")
         else:
             cur.execute("""
                 CREATE TABLE user_settings (
@@ -71,22 +68,56 @@ def migrate():
                     user_id VARCHAR(36) UNIQUE NOT NULL,
                     enable_description BOOLEAN DEFAULT 0,
                     enable_date_picker BOOLEAN DEFAULT 0,
+                    enable_wishlist    BOOLEAN DEFAULT 0,
                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 )
             """)
-            print("creada")
+            print("  + user_settings: creada")
+
+        # Agregar columna nueva si la tabla ya existía
+        add_column_safe(cur, 'user_settings', 'enable_wishlist', "BOOLEAN DEFAULT 0")
+
+        # ── 3. wishlist: tabla nueva ────────────────────────────────────────
+        print("\n[3] Tabla wishlist:")
+        if table_exists(cur, 'wishlist'):
+            print("  - wishlist: ya existe")
+        else:
+            cur.execute("""
+                CREATE TABLE wishlist (
+                    id VARCHAR(36) PRIMARY KEY,
+                    user_id VARCHAR(36) NOT NULL,
+                    couple_username VARCHAR(50),
+                    name VARCHAR(120) NOT NULL,
+                    description VARCHAR(500),
+                    image_data BLOB,
+                    image_mime VARCHAR(40),
+                    image_size INTEGER,
+                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                    is_deleted BOOLEAN DEFAULT 0,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            cur.execute("CREATE INDEX idx_wishlist_user ON wishlist(user_id, is_deleted)")
+            cur.execute("CREATE INDEX idx_wishlist_couple ON wishlist(couple_username, is_deleted)")
+            print("  + wishlist: creada")
+            print("  + indices wishlist: creados")
 
         conn.commit()
 
-        # Verificación
+        # ── Verificación final ──────────────────────────────────────────────
         print("\n" + "-" * 60)
         print("Verificación final:")
         cur.execute("PRAGMA table_info(expenses)")
         cols = [row[1] for row in cur.fetchall()]
-        print(f"  expenses cols: {len(cols)}  -> is_payed:{'OK' if 'is_payed' in cols else 'MISSING'}  expense_time:{'OK' if 'expense_time' in cols else 'MISSING'}")
-        print(f"  user_settings: {'OK' if table_exists(cur, 'user_settings') else 'MISSING'}")
+        print(f"  expenses ({len(cols)} cols): is_payed={'OK' if 'is_payed' in cols else 'MISSING'}, expense_time={'OK' if 'expense_time' in cols else 'MISSING'}")
+
+        cur.execute("PRAGMA table_info(user_settings)")
+        ucols = [row[1] for row in cur.fetchall()]
+        print(f"  user_settings ({len(ucols)} cols): enable_wishlist={'OK' if 'enable_wishlist' in ucols else 'MISSING'}")
+
+        print(f"  wishlist: {'OK' if table_exists(cur, 'wishlist') else 'MISSING'}")
 
         print("\n[OK] Migración completada. Datos existentes intactos.")
         return True

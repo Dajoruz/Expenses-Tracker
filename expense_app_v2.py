@@ -3,7 +3,8 @@ XPNS v3 — Enhanced Expense Tracker with Couple Mode
 Flask + SQLite | Port 5002
 """
 
-from flask import Flask, request, jsonify, render_template, session, Response
+from flask import Flask, request, jsonify, render_template, session, Response, send_file
+from io import BytesIO
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
@@ -123,6 +124,7 @@ class UserSettings(db.Model):
                                     nullable=False, unique=True)
     enable_description  = db.Column(db.Boolean, default=False)
     enable_date_picker  = db.Column(db.Boolean, default=False)
+    enable_wishlist     = db.Column(db.Boolean, default=False)
     created_at          = db.Column(db.DateTime, default=datetime.utcnow)
     updated_at          = db.Column(db.DateTime, default=datetime.utcnow,
                                     onupdate=datetime.utcnow)
@@ -131,6 +133,36 @@ class UserSettings(db.Model):
         return {
             'enable_description': bool(self.enable_description),
             'enable_date_picker': bool(self.enable_date_picker),
+            'enable_wishlist':    bool(self.enable_wishlist),
+        }
+
+
+class Wishlist(db.Model):
+    __tablename__   = 'wishlist'
+    id              = db.Column(db.String(36), primary_key=True,
+                                default=lambda: str(uuid.uuid4()))
+    user_id         = db.Column(db.String(36), db.ForeignKey('users.id'), nullable=False)
+    couple_username = db.Column(db.String(50))   # snapshot del couple en el momento de crear
+    name            = db.Column(db.String(120),  nullable=False)
+    description     = db.Column(db.String(500))
+    image_data      = db.Column(db.LargeBinary)  # foto comprimida
+    image_mime      = db.Column(db.String(40))
+    image_size      = db.Column(db.Integer)
+    created_at      = db.Column(db.DateTime, default=datetime.utcnow)
+    is_deleted      = db.Column(db.Boolean, default=False)
+
+    def to_dict(self, owner_username=None, owner_display=None):
+        return {
+            'id':              self.id,
+            'user_id':         self.user_id,
+            'owner_username':  owner_username,
+            'owner_display':   owner_display or owner_username,
+            'name':            self.name,
+            'description':     self.description or '',
+            'has_image':       self.image_data is not None,
+            'image_mime':      self.image_mime,
+            'image_size':      self.image_size,
+            'created_at':      self.created_at.isoformat(),
         }
 
 
@@ -145,6 +177,7 @@ with app.app_context():
         "ALTER TABLE expenses ADD COLUMN partner_expense_id VARCHAR(36)",
         "ALTER TABLE expenses ADD COLUMN is_payed BOOLEAN DEFAULT 0",
         "ALTER TABLE expenses ADD COLUMN expense_time VARCHAR(8) DEFAULT '12:00:00'",
+        "ALTER TABLE user_settings ADD COLUMN enable_wishlist BOOLEAN DEFAULT 0",
     ]
     with db.engine.connect() as _conn:
         for _sql in _new_cols:
@@ -770,6 +803,7 @@ def delete_account(user):
         return jsonify({'error': 'Incorrect password'}), 400
     Expense.query.filter_by(user_id=user.id).delete()
     UserSettings.query.filter_by(user_id=user.id).delete()
+    Wishlist.query.filter_by(user_id=user.id).delete()
     db.session.delete(user)
     db.session.commit()
     session.clear()
@@ -800,9 +834,181 @@ def update_user_settings(user):
         s.enable_description = bool(d['enable_description'])
     if 'enable_date_picker' in d:
         s.enable_date_picker = bool(d['enable_date_picker'])
+    if 'enable_wishlist' in d:
+        s.enable_wishlist = bool(d['enable_wishlist'])
     s.updated_at = datetime.utcnow()
     db.session.commit()
     return jsonify({'status': 'success', 'settings': s.to_dict()})
+
+# ── Wishlist ──────────────────────────────────────────────────────────────────
+
+WISHLIST_MAX_BYTES = 600_000  # 600 KB tras compresión
+WISHLIST_ALLOWED_MIMES = {'image/jpeg', 'image/png', 'image/webp', 'image/gif'}
+
+def _wishlist_visible_to(user, scope):
+    """
+    Devuelve query base de items visibles según el scope:
+      - 'mine'    : sólo míos
+      - 'partner' : sólo de la pareja
+      - 'both'    : ambos (mío + pareja)
+    """
+    base = Wishlist.query.filter_by(is_deleted=False)
+    partner = None
+    if user.couple_username:
+        partner = User.query.filter_by(username=user.couple_username).first()
+
+    if scope == 'mine':
+        return base.filter(Wishlist.user_id == user.id), partner
+    if scope == 'partner':
+        if not partner:
+            return base.filter(db.false()), None
+        return base.filter(Wishlist.user_id == partner.id), partner
+    # both
+    ids = [user.id]
+    if partner:
+        ids.append(partner.id)
+    return base.filter(Wishlist.user_id.in_(ids)), partner
+
+
+@app.route('/api/wishlist', methods=['GET'])
+@require_auth
+def get_wishlist(user):
+    s = _get_or_create_settings(user)
+    if not s.enable_wishlist:
+        return jsonify({'error': 'Wishlist disabled'}), 403
+
+    scope = (request.args.get('scope') or 'both').lower()
+    if scope not in ('both', 'partner', 'mine'):
+        scope = 'both'
+
+    q, partner = _wishlist_visible_to(user, scope)
+    items = q.order_by(Wishlist.created_at.desc()).limit(200).all()
+
+    me_map = {user.id: (user.username, user.display_name or user.username)}
+    if partner:
+        me_map[partner.id] = (partner.username, partner.display_name or partner.username)
+
+    out = []
+    for w in items:
+        owner_uname, owner_disp = me_map.get(w.user_id, (None, None))
+        d = w.to_dict(owner_username=owner_uname, owner_display=owner_disp)
+        d['mine'] = (w.user_id == user.id)
+        out.append(d)
+
+    return jsonify({'scope': scope, 'items': out, 'has_partner': bool(partner)})
+
+
+@app.route('/api/wishlist', methods=['POST'])
+@require_auth
+def create_wishlist(user):
+    s = _get_or_create_settings(user)
+    if not s.enable_wishlist:
+        return jsonify({'error': 'Wishlist disabled'}), 403
+
+    # Soporta multipart o JSON sin imagen
+    if request.content_type and request.content_type.startswith('multipart/'):
+        name        = (request.form.get('name') or '').strip()
+        description = (request.form.get('description') or '').strip()
+        file        = request.files.get('image')
+    else:
+        d = request.get_json() or {}
+        name        = (d.get('name') or '').strip()
+        description = (d.get('description') or '').strip()
+        file        = None
+
+    if not name:
+        return jsonify({'error': 'Name required'}), 400
+
+    image_data = None
+    image_mime = None
+    image_size = None
+    if file and file.filename:
+        mime = (file.mimetype or '').lower()
+        if mime not in WISHLIST_ALLOWED_MIMES:
+            return jsonify({'error': f'Image type not allowed: {mime}'}), 400
+        blob = file.read()
+        if len(blob) > WISHLIST_MAX_BYTES:
+            return jsonify({'error': f'Image too large after client compression ({len(blob)} bytes)'}), 413
+        image_data = blob
+        image_mime = mime
+        image_size = len(blob)
+
+    w = Wishlist(
+        user_id         = user.id,
+        couple_username = user.couple_username,
+        name            = name[:120],
+        description     = description[:500] if description else None,
+        image_data      = image_data,
+        image_mime      = image_mime,
+        image_size      = image_size,
+    )
+    db.session.add(w)
+    db.session.commit()
+
+    return jsonify({
+        'status': 'success',
+        'item': w.to_dict(
+            owner_username=user.username,
+            owner_display=user.display_name or user.username,
+        ),
+    }), 201
+
+
+@app.route('/api/wishlist/<wid>', methods=['DELETE'])
+@require_auth
+def delete_wishlist(user, wid):
+    """
+    Borrado lógico. Permite borrar items propios y de la pareja.
+    """
+    s = _get_or_create_settings(user)
+    if not s.enable_wishlist:
+        return jsonify({'error': 'Wishlist disabled'}), 403
+
+    w = Wishlist.query.filter_by(id=wid, is_deleted=False).first()
+    if not w:
+        return jsonify({'error': 'Not found'}), 404
+
+    # Sólo puede borrar el dueño o la pareja registrada
+    allowed_user_ids = {user.id}
+    if user.couple_username:
+        partner = User.query.filter_by(username=user.couple_username).first()
+        if partner:
+            allowed_user_ids.add(partner.id)
+
+    if w.user_id not in allowed_user_ids:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    w.is_deleted = True
+    db.session.commit()
+    return jsonify({'status': 'success'})
+
+
+@app.route('/api/wishlist/<wid>/image')
+@require_auth
+def get_wishlist_image(user, wid):
+    s = _get_or_create_settings(user)
+    if not s.enable_wishlist:
+        return jsonify({'error': 'Wishlist disabled'}), 403
+
+    w = Wishlist.query.filter_by(id=wid, is_deleted=False).first()
+    if not w or not w.image_data:
+        return jsonify({'error': 'Image not found'}), 404
+
+    # Acceso: dueño o pareja
+    allowed_user_ids = {user.id}
+    if user.couple_username:
+        partner = User.query.filter_by(username=user.couple_username).first()
+        if partner:
+            allowed_user_ids.add(partner.id)
+    if w.user_id not in allowed_user_ids:
+        return jsonify({'error': 'Forbidden'}), 403
+
+    return send_file(
+        BytesIO(w.image_data),
+        mimetype=w.image_mime or 'image/jpeg',
+        download_name=f'wishlist_{wid}.bin',
+        max_age=3600,
+    )
 
 # ── Mark couple expenses as paid ──────────────────────────────────────────────
 

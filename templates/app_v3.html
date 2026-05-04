@@ -120,6 +120,56 @@ select.finput option{background:var(--bg3)}
 .btn-paid:hover{box-shadow:0 6px 28px rgba(0,255,136,.45);transform:translateY(-1px)}
 .btn-paid:disabled{opacity:.5;cursor:not-allowed;background:var(--bg4);color:var(--text3);box-shadow:none}
 
+/* ── Wishlist ── */
+.wl-toolbar{display:flex;gap:8px;margin-bottom:14px}
+.wl-btn{flex:1;background:var(--bg2);border:1px solid var(--border);
+  border-radius:var(--r);color:var(--text2);font-size:13px;font-weight:600;
+  padding:11px;cursor:pointer;transition:all .2s;letter-spacing:.5px;font-family:var(--head)}
+.wl-btn:hover{border-color:var(--border2);color:var(--text)}
+.wl-btn.active{background:linear-gradient(135deg,rgba(180,79,255,.25),rgba(0,212,255,.18));
+  border-color:var(--violet);color:#fff;box-shadow:0 0 0 1px rgba(180,79,255,.3)}
+.wl-btn.scope.active{background:linear-gradient(135deg,rgba(0,255,136,.22),rgba(0,212,255,.18));
+  border-color:var(--green);color:#fff;box-shadow:0 0 0 1px rgba(0,255,136,.3)}
+.wl-add-form{background:var(--bg2);border:1px solid rgba(180,79,255,.25);border-radius:var(--r2);
+  padding:14px 16px;margin-bottom:14px;display:none;flex-direction:column;gap:10px}
+.wl-add-form.on{display:flex}
+.wl-file-row{display:flex;align-items:center;gap:10px}
+.wl-file-input{display:none}
+.wl-file-pick{background:var(--bg3);border:1px dashed var(--border2);
+  border-radius:var(--r);padding:10px 14px;color:var(--text2);font-size:13px;cursor:pointer;
+  font-family:var(--mono);transition:all .2s;flex:1;text-align:center}
+.wl-file-pick:hover{border-color:var(--violet);color:var(--text)}
+.wl-file-thumb{width:54px;height:54px;border-radius:8px;object-fit:cover;
+  border:1px solid var(--border2);display:none}
+.wl-file-thumb.on{display:block}
+.wl-list{display:flex;flex-direction:column;gap:8px}
+.wl-item{background:var(--bg2);border:1px solid var(--border);border-radius:var(--r2);
+  padding:12px 14px;display:flex;align-items:center;gap:12px;transition:border-color .2s}
+.wl-item:hover{border-color:var(--border2)}
+.wl-info{flex:1;min-width:0}
+.wl-name{font-size:14px;font-weight:700;color:var(--text);
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wl-desc{font-size:12px;color:var(--text2);font-family:var(--mono);margin-top:3px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.wl-meta{font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:5px}
+.wl-meta .wl-owner-tag{display:inline-block;padding:1px 6px;border-radius:8px;
+  background:rgba(180,79,255,.12);color:var(--violet);margin-right:4px}
+.wl-meta .wl-owner-tag.partner{background:rgba(0,212,255,.12);color:var(--blue)}
+.wl-thumb{width:60px;height:60px;border-radius:10px;object-fit:cover;
+  border:1px solid var(--border2);cursor:pointer;flex-shrink:0;background:var(--bg3)}
+.wl-del{background:none;border:none;color:var(--text3);cursor:pointer;
+  font-size:16px;padding:4px 6px;transition:color .2s;flex-shrink:0}
+.wl-del:hover{color:#ff4444}
+
+/* Lightbox */
+#wlLightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;
+  display:none;align-items:center;justify-content:center;padding:20px;cursor:zoom-out}
+#wlLightbox.on{display:flex}
+#wlLightbox img{max-width:100%;max-height:100%;border-radius:8px;box-shadow:0 12px 60px rgba(0,0,0,.8)}
+#wlLightboxClose{position:absolute;top:16px;right:18px;background:rgba(255,255,255,.1);
+  border:1px solid rgba(255,255,255,.2);color:#fff;width:36px;height:36px;border-radius:50%;
+  font-size:20px;cursor:pointer;display:flex;align-items:center;justify-content:center}
+
 /* Main content */
 #appMain{flex:1;display:flex;flex-direction:column;overflow:hidden;width:100%}
 #appHeader{background:var(--bg2);border-bottom:1px solid var(--border);
@@ -437,6 +487,9 @@ select.finput option{background:var(--bg3)}
       <button class="sb-item" data-view="couple" id="navCouple" style="display:none" onclick="navTo('couple')">
         <span class="sb-icon">💑</span> Couple
       </button>
+      <button class="sb-item" data-view="wishlist" id="navWishlist" style="display:none" onclick="navTo('wishlist')">
+        <span class="sb-icon">🎁</span> Wishlist
+      </button>
       <button class="sb-item" data-view="history" onclick="navTo('history')">
         <span class="sb-icon">📅</span> History
       </button>
@@ -688,6 +741,39 @@ select.finput option{background:var(--bg3)}
 
       </div><!-- /couple -->
 
+      <!-- ─── WISHLIST ─── -->
+      <div class="view" id="viewWishlist">
+        <div class="wl-toolbar">
+          <button class="wl-btn" id="wlAddBtn" onclick="toggleWishAdd()">＋ Agregar</button>
+          <button class="wl-btn scope" id="wlScopeBtn" onclick="cycleWishScope()">👥 Ambos</button>
+        </div>
+
+        <div class="wl-add-form" id="wlAddForm">
+          <div class="fgroup">
+            <label class="flabel">Nombre</label>
+            <input class="finput" id="wlName" placeholder="Ej. Audífonos nuevos" maxlength="120">
+          </div>
+          <div class="fgroup">
+            <label class="flabel">Descripción</label>
+            <input class="finput" id="wlDesc" placeholder="Notas, link, modelo…" maxlength="500">
+          </div>
+          <div class="fgroup">
+            <label class="flabel">Imagen (opcional)</label>
+            <div class="wl-file-row">
+              <label class="wl-file-pick" for="wlFile">📎 Seleccionar foto</label>
+              <input type="file" id="wlFile" class="wl-file-input" accept="image/*" onchange="onWishFile()">
+              <img id="wlFileThumb" class="wl-file-thumb" alt="">
+            </div>
+            <div style="font-size:10px;color:var(--text3);font-family:var(--mono);margin-top:4px" id="wlFileInfo"></div>
+          </div>
+          <button class="btn-primary" id="wlSubmit" onclick="submitWish()">Guardar en wishlist</button>
+        </div>
+
+        <div class="wl-list" id="wlList">
+          <div style="text-align:center;padding:30px"><div class="spin"></div></div>
+        </div>
+      </div><!-- /wishlist -->
+
       <!-- ─── HISTORY ─── -->
       <div class="view" id="viewHistory">
         <div class="view-tabs">
@@ -796,8 +882,19 @@ select.finput option{background:var(--bg3)}
                   <div class="toggle-thumb"></div>
                 </label>
               </div>
-              <p style="font-size:11px;color:var(--text3);font-family:var(--mono)">
+              <p style="font-size:11px;color:var(--text3);font-family:var(--mono);margin-bottom:14px">
                 Cuando está activo, aparece un campo de descripción al añadir gastos.
+              </p>
+              <div class="divided-row" style="margin-bottom:10px">
+                <span class="divided-lbl">🎁 Activar wishlists <span style="color:var(--violet);font-family:var(--mono);font-size:10px;margin-left:4px">BETA</span></span>
+                <label class="toggle-switch">
+                  <input type="checkbox" id="setWishToggle" onchange="onWishlistToggle()">
+                  <div class="toggle-track"></div>
+                  <div class="toggle-thumb"></div>
+                </label>
+              </div>
+              <p style="font-size:11px;color:var(--text3);font-family:var(--mono)">
+                Lista compartida de cosas que tú y tu pareja quieren. Requiere pareja vinculada.
               </p>
             </div>
           </div>
@@ -884,6 +981,12 @@ select.finput option{background:var(--bg3)}
 
 <div id="toast"></div>
 
+<!-- Wishlist Lightbox -->
+<div id="wlLightbox" onclick="closeLightbox(event)">
+  <button id="wlLightboxClose" onclick="closeLightbox(event,true)" aria-label="Close">×</button>
+  <img id="wlLightboxImg" src="" alt="">
+</div>
+
 <script>
 // ─── State ─────────────────────────────────────────────────────────────────
 const S = {
@@ -893,8 +996,10 @@ const S = {
   histView: '7days',
   delMode: false,
   finderResults: [],
-  prefs: { enable_description: false, enable_date_picker: false },
+  prefs: { enable_description: false, enable_date_picker: false, enable_wishlist: false },
   lastDashData: null,
+  wishScope: 'both',  // 'both' | 'partner' | 'mine'
+  wishAddOpen: false,
 };
 
 const CAT = {
@@ -1015,8 +1120,9 @@ async function loadUserPrefs() {
     const data = await api('GET', '/api/settings/user-settings');
     S.prefs.enable_description = !!data.enable_description;
     S.prefs.enable_date_picker = !!data.enable_date_picker;
+    S.prefs.enable_wishlist    = !!data.enable_wishlist;
   } catch(e) {
-    S.prefs = { enable_description:false, enable_date_picker:false };
+    S.prefs = { enable_description:false, enable_date_picker:false, enable_wishlist:false };
   }
   applyPrefs();
 }
@@ -1027,18 +1133,25 @@ function applyPrefs() {
   if (sbDate) sbDate.checked = S.prefs.enable_date_picker;
   const setDesc = document.getElementById('setDescToggle');
   if (setDesc) setDesc.checked = S.prefs.enable_description;
+  const setWish = document.getElementById('setWishToggle');
+  if (setWish) setWish.checked = S.prefs.enable_wishlist;
 
   // Show/hide fields in Add Expense
   const descGroup = document.getElementById('descGroup');
   if (descGroup) descGroup.style.display = S.prefs.enable_description ? '' : 'none';
   const dateGroup = document.getElementById('dateGroup');
+  const di = document.getElementById('dateInput');
   if (dateGroup) {
     dateGroup.style.display = S.prefs.enable_date_picker ? '' : 'none';
-    if (S.prefs.enable_date_picker) {
-      const di = document.getElementById('dateInput');
-      if (di && !di.value) di.value = new Date().toISOString().slice(0,10);
+    if (di) {
+      // Siempre forzar a hoy: si el toggle está OFF se ignora; si está ON, el usuario puede cambiarla
+      di.value = new Date().toISOString().slice(0,10);
     }
   }
+
+  // Wishlist tab visibility (depends on prefs + couple)
+  const navWl = document.getElementById('navWishlist');
+  if (navWl) navWl.style.display = (S.prefs.enable_wishlist && S.user && S.user.couple_username) ? '' : 'none';
 }
 
 function updateSidebar() {
@@ -1063,11 +1176,13 @@ function openSidebar()  { document.getElementById('sidebar').classList.add('open
 function closeSidebar() { document.getElementById('sidebar').classList.remove('open'); document.getElementById('sidebarOverlay').classList.remove('on'); }
 
 // ─── Navigation ────────────────────────────────────────────────────────────
-const VIEW_TITLES = { main:'Main Menu', dashboard:'Dashboard', couple:'Couple', history:'History', finder:'Finder', settings:'Settings' };
+const VIEW_TITLES = { main:'Main Menu', dashboard:'Dashboard', couple:'Couple', wishlist:'Wishlist', history:'History', finder:'Finder', settings:'Settings' };
 
 function navTo(view) {
   // Couple tab guarded by relationship
   if (view === 'couple' && (!S.user || !S.user.couple_username)) view = 'main';
+  // Wishlist tab guarded by pref + couple
+  if (view === 'wishlist' && (!S.prefs.enable_wishlist || !S.user || !S.user.couple_username)) view = 'main';
 
   S.currentView = view;
   closeSidebar();
@@ -1079,6 +1194,7 @@ function navTo(view) {
   if      (view==='main')      loadMain();
   else if (view==='dashboard') loadDashboard();
   else if (view==='couple')    loadCouple();
+  else if (view==='wishlist')  loadWishlist();
   else if (view==='history')   loadHistory(S.histView);
   else if (view==='finder')    loadFinderAll();
   else if (view==='settings')  loadSettings();
@@ -1200,7 +1316,9 @@ async function addExpense() {
     description:desc, is_divided:isDivided,
   };
 
-  if (S.prefs.enable_date_picker) {
+  // SOLO mandar fecha custom si el toggle está activo en este momento
+  const dateToggleOn = !!(document.getElementById('sbDateToggle') && document.getElementById('sbDateToggle').checked);
+  if (S.prefs.enable_date_picker && dateToggleOn) {
     const dv = document.getElementById('dateInput').value;
     if (dv) {
       payload.expense_date = dv;
@@ -1754,6 +1872,183 @@ async function onDescriptionToggle() {
   const data = await api('PUT','/api/settings/user-settings',{enable_description:checked});
   if (data.error){ toast(data.error,'err'); return; }
   toast(checked ? 'Descripción activada ✓' : 'Descripción desactivada');
+}
+
+async function onWishlistToggle() {
+  const checked = document.getElementById('setWishToggle').checked;
+  if (checked && !(S.user && S.user.couple_username)) {
+    document.getElementById('setWishToggle').checked = false;
+    toast('Necesitas una pareja vinculada para usar wishlist','err');
+    return;
+  }
+  S.prefs.enable_wishlist = checked;
+  applyPrefs();
+  const data = await api('PUT','/api/settings/user-settings',{enable_wishlist:checked});
+  if (data.error){ toast(data.error,'err'); return; }
+  toast(checked ? 'Wishlist activada ✓' : 'Wishlist desactivada');
+}
+
+// ─── Wishlist ──────────────────────────────────────────────────────────────
+const WISH_MAX_DIM = 1280;     // px máx
+const WISH_QUALITY = 0.78;     // calidad JPEG
+const WISH_MAX_BYTES = 600_000;
+
+function toggleWishAdd() {
+  S.wishAddOpen = !S.wishAddOpen;
+  document.getElementById('wlAddForm').classList.toggle('on', S.wishAddOpen);
+  document.getElementById('wlAddBtn').classList.toggle('active', S.wishAddOpen);
+}
+
+function cycleWishScope() {
+  const order = ['both','partner','mine'];
+  const labels = { both:'👥 Ambos', partner:'💑 Pareja', mine:'🙋 Míos' };
+  const i = order.indexOf(S.wishScope);
+  S.wishScope = order[(i+1) % order.length];
+  document.getElementById('wlScopeBtn').textContent = labels[S.wishScope];
+  loadWishlist();
+}
+
+async function loadWishlist() {
+  if (!S.prefs.enable_wishlist || !S.user || !S.user.couple_username) {
+    navTo('main'); return;
+  }
+  // estado inicial del scope label
+  const labels = { both:'👥 Ambos', partner:'💑 Pareja', mine:'🙋 Míos' };
+  document.getElementById('wlScopeBtn').textContent = labels[S.wishScope] || labels.both;
+
+  const list = document.getElementById('wlList');
+  list.innerHTML = '<div style="text-align:center;padding:30px"><div class="spin"></div></div>';
+  const data = await api('GET',`/api/wishlist?scope=${S.wishScope}`);
+  if (data.error) { list.innerHTML = `<div class="empty-state">${esc(data.error)}</div>`; return; }
+  renderWishlist(data.items||[]);
+}
+
+function renderWishlist(items) {
+  const list = document.getElementById('wlList');
+  if (!items.length) { list.innerHTML = '<div class="empty-state">Aún nada en la wishlist</div>'; return; }
+  list.innerHTML = items.map(it => {
+    const ownerTag = it.mine
+      ? `<span class="wl-owner-tag">tú</span>`
+      : `<span class="wl-owner-tag partner">${esc(it.owner_display||'pareja')}</span>`;
+    const fecha = new Date(it.created_at).toLocaleDateString('es-MX',{day:'numeric',month:'short'});
+    const desc = it.description ? `<div class="wl-desc">${esc(it.description)}</div>` : '';
+    const thumb = it.has_image
+      ? `<img class="wl-thumb" src="/api/wishlist/${it.id}/image" alt="" onclick="openLightbox('${it.id}')">`
+      : '';
+    return `<div class="wl-item">
+      <div class="wl-info">
+        <div class="wl-name">${esc(it.name)}</div>
+        ${desc}
+        <div class="wl-meta">${ownerTag} · ${fecha}</div>
+      </div>
+      ${thumb}
+      <button class="wl-del" title="Eliminar" onclick="deleteWish('${it.id}')">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function onWishFile() {
+  const f = document.getElementById('wlFile').files[0];
+  const thumb = document.getElementById('wlFileThumb');
+  const info  = document.getElementById('wlFileInfo');
+  if (!f) { thumb.classList.remove('on'); thumb.src=''; info.textContent=''; return; }
+  thumb.src = URL.createObjectURL(f);
+  thumb.classList.add('on');
+  info.textContent = `Original: ${(f.size/1024).toFixed(0)} KB · se comprimirá al subir`;
+}
+
+async function compressImage(file) {
+  // Devuelve Blob JPEG (o el original si falla / no es imagen)
+  if (!file || !file.type.startsWith('image/')) return file;
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      let { width, height } = img;
+      if (width > WISH_MAX_DIM || height > WISH_MAX_DIM) {
+        const r = Math.min(WISH_MAX_DIM/width, WISH_MAX_DIM/height);
+        width  = Math.round(width  * r);
+        height = Math.round(height * r);
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = width; canvas.height = height;
+      canvas.getContext('2d').drawImage(img, 0, 0, width, height);
+      // intenta jpeg, si sigue muy grande, baja calidad
+      const tryQ = (q) => new Promise(res => canvas.toBlob(res, 'image/jpeg', q));
+      (async () => {
+        let q = WISH_QUALITY;
+        let blob = await tryQ(q);
+        while (blob && blob.size > WISH_MAX_BYTES && q > 0.4) {
+          q -= 0.1;
+          blob = await tryQ(q);
+        }
+        URL.revokeObjectURL(url);
+        resolve(blob || file);
+      })();
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+    img.src = url;
+  });
+}
+
+async function submitWish() {
+  const name = document.getElementById('wlName').value.trim();
+  const desc = document.getElementById('wlDesc').value.trim();
+  const fileInput = document.getElementById('wlFile');
+  if (!name) { toast('Nombre requerido','err'); return; }
+
+  const btn = document.getElementById('wlSubmit');
+  btn.disabled = true; btn.innerHTML = '<div class="spin" style="margin:0 auto"></div>';
+
+  const fd = new FormData();
+  fd.append('name', name);
+  fd.append('description', desc);
+  if (fileInput.files[0]) {
+    const blob = await compressImage(fileInput.files[0]);
+    if (blob && blob.size > WISH_MAX_BYTES) {
+      btn.disabled=false; btn.textContent='Guardar en wishlist';
+      toast('Imagen muy grande incluso comprimida','err'); return;
+    }
+    fd.append('image', blob, 'wishlist.jpg');
+  }
+
+  let resp;
+  try {
+    const r = await fetch('/api/wishlist', { method:'POST', credentials:'include', body: fd });
+    resp = await r.json();
+  } catch(e) { resp = { error: 'Network error' }; }
+
+  btn.disabled=false; btn.textContent='Guardar en wishlist';
+  if (resp.error) { toast(resp.error,'err'); return; }
+
+  // Reset form
+  document.getElementById('wlName').value='';
+  document.getElementById('wlDesc').value='';
+  fileInput.value=''; onWishFile();
+  toggleWishAdd();
+  toast('Agregado a wishlist ✓');
+  loadWishlist();
+}
+
+async function deleteWish(id) {
+  if (!confirm('¿Eliminar este item de la wishlist?')) return;
+  const data = await api('DELETE', `/api/wishlist/${id}`);
+  if (data.error) { toast(data.error,'err'); return; }
+  toast('Eliminado');
+  loadWishlist();
+}
+
+function openLightbox(id) {
+  const lb = document.getElementById('wlLightbox');
+  document.getElementById('wlLightboxImg').src = `/api/wishlist/${id}/image?full=1`;
+  lb.classList.add('on');
+}
+
+function closeLightbox(e, force) {
+  if (force || e.target.id === 'wlLightbox' || e.target.id === 'wlLightboxClose') {
+    document.getElementById('wlLightbox').classList.remove('on');
+    document.getElementById('wlLightboxImg').src = '';
+  }
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
