@@ -1494,12 +1494,25 @@ def _serve():
         app.run(host=host, port=port, debug=False, threaded=True)
         return
     log.info('XPNS v3 escuchando en http://%s:%s (waitress)', host, port)
-    serve(
-        app, host=host, port=port,
-        threads=int(os.environ.get('XPNS_THREADS', '4')),
-        channel_timeout=120,
-        ident='xpns',
-    )
+    try:
+        serve(
+            app, host=host, port=port,
+            threads=int(os.environ.get('XPNS_THREADS', '4')),
+            channel_timeout=120,
+            ident='xpns',
+        )
+    except OSError as e:
+        # errno 98 = EADDRINUSE. Un traceback de 30 lineas aqui no ayuda a nadie.
+        if getattr(e, 'errno', None) in (48, 98):
+            log.error('=' * 66)
+            log.error('EL PUERTO %s YA ESTA OCUPADO por otro proceso.', port)
+            log.error('Casi siempre es otra copia de XPNS que quedo viva.')
+            log.error('  pkill -f \'python.*expense_app_v2\'')
+            log.error('  pkg install psmisc && fuser -k %s/tcp', port)
+            log.error('  o arranca en otro puerto:  XPNS_PORT=5003 ./run_termux.sh')
+            log.error('=' * 66)
+            raise SystemExit(2)
+        raise
 
 
 if __name__ == '__main__':

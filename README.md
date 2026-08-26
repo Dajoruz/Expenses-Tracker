@@ -194,3 +194,24 @@ pkg install psmisc && fuser -k 5002/tcp
 # o simplemente usa otro puerto:
 XPNS_PORT=5003 ./run_termux.sh
 ```
+
+### Bucle de "Address already in use"
+
+Si el log repite `OSError: [Errno 98] Address already in use` una y otra vez,
+hay otro proceso con el puerto tomado — casi siempre **otra copia de
+`run_termux.sh`** ya corriendo: cada supervisor relanza su propia app y se
+pelean por el puerto sin parar.
+
+`run_termux.sh` ahora lo previene: mata otros supervisores al arrancar,
+comprueba el puerto **antes de cada relanzamiento**, y si el server muere 5
+veces seguidas al arrancar se detiene con el error a la vista en vez de
+reintentar para siempre.
+
+Para salir del bucle a mano:
+
+```bash
+pkill -f run_termux.sh
+pkill -f 'python.*expense_app_v2'
+pkg install psmisc && fuser -k 5002/tcp
+./run_termux.sh
+```

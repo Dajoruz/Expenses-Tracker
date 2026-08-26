@@ -25,15 +25,43 @@ say(){ echo "[xpns] $*"; }
 # OJO: el `ps` de Android/toybox no soporta `-eo pid=,comm=,args=` como el de
 # Linux de escritorio; ahi devuelve vacio y parece que no corre nada.
 # /proc/<pid>/cmdline si funciona siempre.
+# Toda la cadena de ancestros (shell que nos lanzo, su shell, etc.).
+# Sin esto podriamos matar al proceso que nos esta ejecutando si su linea de
+# comandos menciona el script — pasa al lanzarlo como `bash run_termux.sh`.
+ancestors() {
+  a=$$
+  while [ -n "$a" ] && [ "$a" != "0" ] && [ "$a" != "1" ]; do
+    echo "$a"
+    a=$(awk '{print $4}' "/proc/$a/stat" 2>/dev/null)
+  done
+}
+ANCESTORS=" $(ancestors | tr '\n' ' ') "
+
+is_ancestor() { case "$ANCESTORS" in *" $1 "*) return 0 ;; *) return 1 ;; esac; }
+
 find_app_pids() {
   for d in /proc/[0-9]*; do
     p=${d#/proc/}
-    [ "$p" = "$$" ] && continue
-    [ "$p" = "$PPID" ] && continue
-    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    is_ancestor "$p" && continue
+    # Solo los primeros 3 argumentos (ejecutable + script), no toda la
+    # linea: si no, una shell que solo MENCIONA el nombre se cuenta como match.
+    cmd=$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -3 | tr '\n' ' ') || continue
     case "$cmd" in
       *diagnose_termux*|*run_termux*) continue ;;
       *python*expense_app_v2.py*) echo "$p" ;;
+    esac
+  done
+}
+
+find_sup_pids() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    is_ancestor "$p" && continue
+    # Solo los primeros 2 argumentos (ejecutable + script), no toda la
+    # linea: si no, una shell que solo MENCIONA el nombre se cuenta como match.
+    cmd=$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -2 | tr '\n' ' ') || continue
+    case "$cmd" in
+      *run_termux.sh*) echo "$p" ;;
     esac
   done
 }
@@ -61,6 +89,18 @@ PY
 
 # ── Evitar dos instancias peleandose por la BD ────────────────────────────────
 EXISTING=$(find_app_pids)
+# Otros supervisores vivos. Si no los matamos, cada uno relanza SU app y se
+# pelean por el puerto en un bucle infinito de "Address already in use".
+OTHER_SUP=$(find_sup_pids)
+if [ -n "$OTHER_SUP" ]; then
+  say "hay otro run_termux.sh corriendo (pid: $(echo $OTHER_SUP)). Lo detengo."
+  # shellcheck disable=SC2086
+  kill $OTHER_SUP 2>/dev/null; sleep 2
+  # shellcheck disable=SC2086
+  kill -9 $OTHER_SUP 2>/dev/null; sleep 1
+  EXISTING=$(find_app_pids)
+fi
+
 if [ -n "$EXISTING" ]; then
   say "ya hay un server corriendo (pid: $(echo $EXISTING)). Lo detengo para no duplicar."
   # shellcheck disable=SC2086
@@ -98,7 +138,7 @@ else
 fi
 say "Recuerda poner Termux en bateria 'Sin restricciones' en Ajustes de Android."
 
-APP_PID=""; CF_PID=""
+APP_PID=""; CF_PID=""; APP_STARTED_AT=0
 cleanup() {
   echo ""; say "cerrando..."
   [ -n "$APP_PID" ] && kill "$APP_PID" 2>/dev/null
@@ -122,10 +162,45 @@ say "Ctrl+C para detener"
 echo ""
 
 # ── 3. Supervisor: mantiene vivos la app y el tunel ───────────────────────────
+# Historial de reinicios, para no relanzar en bucle infinito
+RESTARTS=0
+FIRST_RESTART=0
+
+free_port_or_fail() {
+  # Relanzar sin comprobar el puerto es lo que producia el bucle infinito de
+  # "OSError: [Errno 98] Address already in use" cada 15 segundos.
+  port_busy "$PORT" || return 0
+  say "el puerto $PORT esta ocupado; intento liberarlo..."
+  # shellcheck disable=SC2086
+  kill $(find_app_pids) 2>/dev/null; sleep 2
+  command -v fuser >/dev/null 2>&1 && fuser -k "$PORT/tcp" 2>/dev/null
+  sleep 2
+  if port_busy "$PORT"; then
+    say ""
+    say "ERROR: el puerto $PORT sigue ocupado por un proceso que no puedo matar."
+    say "       Relanzar no sirve de nada, asi que me detengo aqui."
+    say "       Prueba:"
+    say "         pkg install psmisc && fuser -k $PORT/tcp"
+    say "         XPNS_PORT=5003 ./run_termux.sh"
+    say "         o cierra Termux del todo (apps recientes) y vuelve a abrir"
+    return 1
+  fi
+  say "puerto liberado"
+  return 0
+}
+
 start_app() {
+  free_port_or_fail || { cleanup_fail; }
   python expense_app_v2.py >>"$LOGDIR/xpns.log" 2>&1 &
   APP_PID=$!
+  APP_STARTED_AT=$(date +%s)
   say "server arrancado (pid $APP_PID)"
+}
+
+cleanup_fail() {
+  [ -n "${CF_PID:-}" ] && kill "$CF_PID" 2>/dev/null
+  command -v termux-wake-unlock >/dev/null 2>&1 && termux-wake-unlock
+  exit 1
 }
 
 start_tunnel() {
@@ -150,8 +225,37 @@ start_tunnel
 while true; do
   sleep 15
   if ! kill -0 "$APP_PID" 2>/dev/null; then
-    say "el server se cayo (eso es el 502) — relanzando..."
-    tail -n 15 "$LOGDIR/xpns.log" | sed 's/^/       /'
+    NOW=$(date +%s)
+    LIVED=$(( NOW - APP_STARTED_AT ))
+
+    # Si murio casi al instante, es un fallo de arranque (puerto ocupado,
+    # dependencia rota, BD ilegible): relanzar en bucle solo llena el log.
+    if [ "$LIVED" -lt 20 ]; then
+      [ "$RESTARTS" -eq 0 ] && FIRST_RESTART=$NOW
+      RESTARTS=$(( RESTARTS + 1 ))
+    else
+      RESTARTS=0   # vivio un rato: caida normal, el contador se reinicia
+    fi
+
+    if [ "$RESTARTS" -ge 5 ]; then
+      say ""
+      say "=================================================================="
+      say "EL SERVER MURIO 5 VECES SEGUIDAS AL ARRANCAR (en $(( NOW - FIRST_RESTART ))s)."
+      say "No lo relanzo mas: el problema no se arregla reintentando."
+      say "Ultimas lineas del error:"
+      tail -n 25 "$LOGDIR/xpns.log" | sed 's/^/       /'
+      say ""
+      say "Si dice 'Address already in use': otro proceso tiene el puerto $PORT."
+      say "  pkg install psmisc && fuser -k $PORT/tcp"
+      say "  o:  XPNS_PORT=5003 ./run_termux.sh"
+      say "Diagnostico completo:  ./diagnose_termux.sh"
+      say "=================================================================="
+      cleanup_fail
+    fi
+
+    say "el server se cayo (eso es el 502) — relanzando (intento $RESTARTS)..."
+    tail -n 8 "$LOGDIR/xpns.log" | sed 's/^/       /'
+    [ "$RESTARTS" -gt 1 ] && sleep $(( RESTARTS * 3 ))   # backoff
     start_app
   fi
   if [ "$TUNNEL" = "1" ] && [ -n "$CF_PID" ] && ! kill -0 "$CF_PID" 2>/dev/null; then

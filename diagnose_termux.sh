@@ -21,7 +21,9 @@ find_app_pids() {
     p=${d#/proc/}
     [ "$p" = "$$" ] && continue
     [ "$p" = "$PPID" ] && continue
-    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    # Solo los primeros 3 argumentos (ejecutable + script), no toda la
+    # linea: si no, una shell que solo MENCIONA el nombre se cuenta como match.
+    cmd=$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -3 | tr '\n' ' ') || continue
     case "$cmd" in
       *diagnose_termux*|*run_termux*) continue ;;
       *python*expense_app_v2.py*) echo "$p" ;;
@@ -32,7 +34,9 @@ find_app_pids() {
 find_cf_pids() {
   for d in /proc/[0-9]*; do
     p=${d#/proc/}
-    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    # Solo los primeros 2 argumentos (ejecutable + script), no toda la
+    # linea: si no, una shell que solo MENCIONA el nombre se cuenta como match.
+    cmd=$(tr '\0' '\n' < "$d/cmdline" 2>/dev/null | head -2 | tr '\n' ' ') || continue
     case "$cmd" in
       *run_termux*|*diagnose_termux*) continue ;;
       *cloudflared*) echo "$p" ;;
