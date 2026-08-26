@@ -177,3 +177,20 @@ en orden de probabilidad:
 
 La app ahora detecta esto al arrancar y lo dice en el log en vez de fallar en
 silencio, y `/api/health` incluye `db_writable`.
+
+### Si el diagnostico dice "NO esta corriendo" pero `/api/health` responde
+
+Significa que hay un server **de una version vieja** ocupando el puerto. Como el
+puerto esta tomado, el server nuevo no puede escuchar, muere al arrancar, y te
+sigue respondiendo el viejo con los bugs. Se reconoce porque su `/api/health`
+devuelve solo `{"service":"xpns-v3","status":"healthy"}`, sin `db_writable`.
+
+`./run_termux.sh` ya lo detecta y lo mata antes de arrancar. A mano:
+
+```bash
+pkill -f 'python.*expense_app_v2'
+# si el puerto sigue tomado:
+pkg install psmisc && fuser -k 5002/tcp
+# o simplemente usa otro puerto:
+XPNS_PORT=5003 ./run_termux.sh
+```

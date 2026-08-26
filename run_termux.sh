@@ -21,14 +21,72 @@ LOGDIR="$PWD/logs"; mkdir -p "$LOGDIR"
 
 say(){ echo "[xpns] $*"; }
 
+# ── Deteccion de procesos (portable en Android) ──────────────────────────────
+# OJO: el `ps` de Android/toybox no soporta `-eo pid=,comm=,args=` como el de
+# Linux de escritorio; ahi devuelve vacio y parece que no corre nada.
+# /proc/<pid>/cmdline si funciona siempre.
+find_app_pids() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    [ "$p" = "$$" ] && continue
+    [ "$p" = "$PPID" ] && continue
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$cmd" in
+      *diagnose_termux*|*run_termux*) continue ;;
+      *python*expense_app_v2.py*) echo "$p" ;;
+    esac
+  done
+}
+
+find_cf_pids() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$cmd" in
+      *run_termux*|*diagnose_termux*) continue ;;
+      *cloudflared*) echo "$p" ;;
+    esac
+  done
+}
+
+# Quien escucha en el puerto (independiente de como se haya arrancado)
+port_busy() {
+  python - "$1" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket(); s.settimeout(1.5)
+sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1]))) == 0 else 1)
+PY
+}
+
+
 # ── Evitar dos instancias peleandose por la BD ────────────────────────────────
-EXISTING=$(ps -eo pid=,comm=,args= 2>/dev/null | awk -v self="$$" -v par="$PPID" '
-  $1 != self && $1 != par && $2 ~ /^python/ && $0 ~ /expense_app_v2\.py/ { print $1 }')
+EXISTING=$(find_app_pids)
 if [ -n "$EXISTING" ]; then
   say "ya hay un server corriendo (pid: $(echo $EXISTING)). Lo detengo para no duplicar."
   # shellcheck disable=SC2086
   kill $EXISTING 2>/dev/null; sleep 2
-  kill -9 $EXISTING 2>/dev/null
+  # shellcheck disable=SC2086
+  kill -9 $EXISTING 2>/dev/null; sleep 1
+fi
+
+# El puerto puede seguir ocupado por un proceso que no detectamos (por ejemplo
+# uno arrancado desde otra sesion de Termux). Si no lo liberamos, el server
+# nuevo no puede escuchar, muere al instante, y te sigue respondiendo el VIEJO
+# con los bugs. Antes eso pasaba en silencio.
+if port_busy "$PORT"; then
+  say "el puerto $PORT sigue ocupado; intento liberarlo..."
+  command -v fuser >/dev/null 2>&1 && fuser -k "$PORT/tcp" 2>/dev/null
+  sleep 2
+  if port_busy "$PORT"; then
+    say "ERROR: el puerto $PORT sigue ocupado por otro proceso."
+    say "       Ese proceso es el que te responde (probablemente codigo viejo)."
+    say "       Opciones:"
+    say "         pkg install psmisc && fuser -k $PORT/tcp"
+    say "         o usa otro puerto:  XPNS_PORT=5003 ./run_termux.sh"
+    say "         o cierra Termux del todo (deslizar en apps recientes) y reabre"
+    exit 1
+  fi
+  say "puerto liberado"
 fi
 
 # ── 1. Wake lock ──────────────────────────────────────────────────────────────

@@ -12,6 +12,44 @@ bad(){ echo "  [FALLA] $*"; }
 warn(){ echo "  [AVISO] $*"; }
 hdr(){ echo ""; echo "=== $* ==="; }
 
+# ── Deteccion de procesos (portable en Android) ──────────────────────────────
+# OJO: el `ps` de Android/toybox no soporta `-eo pid=,comm=,args=` como el de
+# Linux de escritorio; ahi devuelve vacio y parece que no corre nada.
+# /proc/<pid>/cmdline si funciona siempre.
+find_app_pids() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    [ "$p" = "$$" ] && continue
+    [ "$p" = "$PPID" ] && continue
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$cmd" in
+      *diagnose_termux*|*run_termux*) continue ;;
+      *python*expense_app_v2.py*) echo "$p" ;;
+    esac
+  done
+}
+
+find_cf_pids() {
+  for d in /proc/[0-9]*; do
+    p=${d#/proc/}
+    cmd=$(tr '\0' ' ' < "$d/cmdline" 2>/dev/null) || continue
+    case "$cmd" in
+      *run_termux*|*diagnose_termux*) continue ;;
+      *cloudflared*) echo "$p" ;;
+    esac
+  done
+}
+
+# Quien escucha en el puerto (independiente de como se haya arrancado)
+port_busy() {
+  python - "$1" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket(); s.settimeout(1.5)
+sys.exit(0 if s.connect_ex(('127.0.0.1', int(sys.argv[1]))) == 0 else 1)
+PY
+}
+
+
 echo "======================================================"
 echo " XPNS — diagnostico Termux    $(date)"
 echo "======================================================"
@@ -102,15 +140,21 @@ fi
 hdr "4. El server de XPNS"
 # Solo procesos python de verdad; excluye esta shell, su padre y el propio
 # diagnostico (si no, el script se cuenta a si mismo y reporta copias de mas).
-PIDS=$(ps -eo pid=,comm=,args= 2>/dev/null | awk -v self="$$" -v par="$PPID" '
-  $1 != self && $1 != par && $2 ~ /^python/ && $0 ~ /expense_app_v2\.py/ { print $1 }' | tr '\n' ' ')
+PIDS=$(find_app_pids | tr '\n' ' ')
 PIDS=$(echo $PIDS)
 if [ -n "$PIDS" ]; then
   ok "corriendo (pid: $PIDS)"
   N=$(echo "$PIDS" | wc -w)
   [ "$N" -gt 1 ] && bad "hay $N copias corriendo a la vez — se pelean por la BD. pkill -f 'python.*expense_app_v2'"
 else
-  bad "NO esta corriendo  ->  esto es lo que causa el 502 de Cloudflare"
+  if port_busy "$PORT"; then
+    bad "no detecto el proceso, PERO algo esta escuchando en el puerto $PORT."
+    echo "         Es un server que no arranco desde aqui (o de una version vieja)."
+    echo "         Matalo antes de relanzar:"
+    echo "           fuser -k $PORT/tcp   # o reinicia Termux por completo"
+  else
+    bad "NO esta corriendo  ->  esto es lo que causa el 502 de Cloudflare"
+  fi
 fi
 if command -v curl >/dev/null 2>&1; then
   H=$(curl -s -m 10 "http://127.0.0.1:$PORT/api/health" 2>&1)
@@ -132,8 +176,9 @@ fi
 hdr "5. Cloudflare Tunnel"
 if command -v cloudflared >/dev/null 2>&1; then
   ok "cloudflared instalado: $(cloudflared --version 2>&1 | head -1)"
-  if pgrep -x cloudflared >/dev/null || pgrep -f "cloudflared.*tunnel" >/dev/null; then
-    ok "cloudflared corriendo (pid: $(pgrep -f "cloudflared" | tr '\n' ' '))"
+  CFP=$(find_cf_pids | tr '\n' ' ')
+  if [ -n "$(echo $CFP)" ]; then
+    ok "cloudflared corriendo (pid: $(echo $CFP))"
   else
     bad "cloudflared NO esta corriendo  ->  esto causa el Error 1033"
   fi
@@ -147,7 +192,14 @@ if command -v cloudflared >/dev/null 2>&1; then
     fi
   done
 else
-  warn "cloudflared no esta instalado en este Termux"
+  warn "cloudflared NO esta en el PATH de este Termux."
+  echo "         Pero dajorus.com es un tunel, asi que corre desde otro lado."
+  echo "         Buscalo:"
+  echo "           ls -la ~/.cloudflared/ 2>/dev/null"
+  echo "           ls -la ~/cloudflared* ./cloudflared* 2>/dev/null"
+  CFP=$(find_cf_pids | tr '\n' ' ')
+  [ -n "$(echo $CFP)" ] && warn "hay un proceso cloudflared vivo (pid: $(echo $CFP)) fuera del PATH"
+  echo "         Para instalarlo aqui:  pkg install cloudflared"
 fi
 
 hdr "6. Bateria y wake lock"
