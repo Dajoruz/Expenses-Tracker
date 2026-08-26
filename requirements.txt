@@ -3,3 +3,6 @@ Flask-CORS==4.0.0
 Flask-SQLAlchemy==3.0.5
 python-dateutil==2.8.2
 gunicorn==21.2.0
+# Servidor WSGI puro Python: se instala en Termux sin compilar nada y aguanta
+# corriendo horas, a diferencia del servidor de desarrollo de Flask.
+waitress==3.0.0

@@ -1026,12 +1026,63 @@ const CHART_DEFAULTS = {
 };
 
 // ─── API ───────────────────────────────────────────────────────────────────
+// Antes esta funcion hacia `return r.json()` a secas. Si el server devolvia una
+// pagina de error HTML, se caia la red o el proceso moria, la promesa quedaba
+// rechazada, el `await` de quien llamaba nunca terminaba y la pantalla se
+// quedaba con el spinner girando para siempre. Ahora SIEMPRE devuelve un
+// objeto: `{error: '...'}` en el peor caso.
+const API_TIMEOUT_MS = 25000;
+
 async function api(method, path, body) {
-  const opts = { method, credentials:'include', headers:{'Content-Type':'application/json'} };
-  if (body) opts.body = JSON.stringify(body);
-  const r = await fetch(path, opts);
-  return r.json();
+  const ctrl  = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), API_TIMEOUT_MS);
+  try {
+    const opts = {
+      method, credentials:'include', signal: ctrl.signal,
+      headers: {'Content-Type':'application/json'},
+    };
+    if (body) opts.body = JSON.stringify(body);
+
+    const r    = await fetch(path, opts);
+    const text = await r.text();
+
+    let data;
+    try {
+      data = text ? JSON.parse(text) : {};
+    } catch (e) {
+      console.error('Respuesta no-JSON de', path, text.slice(0, 200));
+      return { error: `El servidor respondio ${r.status} (respuesta no valida)` };
+    }
+
+    if (r.status === 401 && path !== '/api/auth/login' && path !== '/api/auth/me') {
+      onSessionExpired();
+      return { error: 'Sesion expirada' };
+    }
+    if (!r.ok && !data.error) data.error = `Error ${r.status}`;
+    return data;
+
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      console.error('Timeout en', path);
+      return { error: 'El servidor no respondio (timeout). Sigue corriendo?' };
+    }
+    console.error('Fallo de red en', path, e);
+    return { error: 'No se pudo conectar con el servidor' };
+  } finally {
+    clearTimeout(timer);   // pase lo que pase, el timer se limpia
+  }
 }
+
+function onSessionExpired() {
+  S.user = null;
+  try { Object.values(S.charts).forEach(c => c && c.destroy()); } catch(e) {}
+  S.charts = { weekMain:null, last30:null, cat:null, month:null, couple:null, coupleTagged:null };
+  show('authScreen');
+  toast('Tu sesion expiro, inicia sesion de nuevo', 'err');
+}
+
+// Numero seguro: evita que un `undefined.toFixed()` rompa toda la pantalla.
+function num(v) { const n = Number(v); return Number.isFinite(n) ? n : 0; }
 
 // ─── Toast ─────────────────────────────────────────────────────────────────
 function toast(msg, type='ok') {
@@ -1057,8 +1108,11 @@ function authTab(tab) {
 // ─── Init ──────────────────────────────────────────────────────────────────
 async function init() {
   const data = await api('GET', '/api/auth/me');
-  if (data.logged_in) { S.user = data.user; enterApp(); }
-  else show('authScreen');
+  if (data && data.logged_in) { S.user = data.user; enterApp(); }
+  else {
+    show('authScreen');
+    if (data && data.error) toast(data.error, 'err');
+  }
 }
 
 // ─── Auth ──────────────────────────────────────────────────────────────────
@@ -1072,9 +1126,18 @@ async function doLogin(e) {
   errEl.classList.remove('on');
   if (!username || !password) { errEl.textContent='Fill in all fields'; errEl.classList.add('on'); return; }
   btn.disabled=true; btn.innerHTML='<div class="spin" style="margin:0 auto"></div>';
-  const data = await api('POST', '/api/auth/login', {username, password, remember});
-  btn.disabled=false; btn.textContent='Sign In';
-  if (data.error) { errEl.textContent=data.error; errEl.classList.add('on'); return; }
+  let data;
+  try {
+    data = await api('POST', '/api/auth/login', {username, password, remember});
+  } finally {
+    // try/finally: si algo falla, el boton NO se queda bloqueado con el spinner.
+    btn.disabled=false; btn.textContent='Sign In';
+  }
+  if (!data || data.error) {
+    errEl.textContent = (data && data.error) || 'No se pudo iniciar sesion';
+    errEl.classList.add('on');
+    return;
+  }
   S.user = data.user;
   enterApp();
 }
@@ -1089,9 +1152,17 @@ async function doRegister(e) {
   errEl.classList.remove('on');
   if (!username || !password) { errEl.textContent='Fill in required fields'; errEl.classList.add('on'); return; }
   btn.disabled=true; btn.innerHTML='<div class="spin" style="margin:0 auto"></div>';
-  const data = await api('POST', '/api/auth/register', {username, password, display_name});
-  btn.disabled=false; btn.textContent='Create Account';
-  if (data.error) { errEl.textContent=data.error; errEl.classList.add('on'); return; }
+  let data;
+  try {
+    data = await api('POST', '/api/auth/register', {username, password, display_name});
+  } finally {
+    btn.disabled=false; btn.textContent='Create Account';
+  }
+  if (!data || data.error) {
+    errEl.textContent = (data && data.error) || 'No se pudo crear la cuenta';
+    errEl.classList.add('on');
+    return;
+  }
   S.user = data.user;
   enterApp();
 }
@@ -1234,7 +1305,8 @@ function renderWeekChartMain(days) {
 
 async function loadTodayStats() {
   const data = await api('GET', '/api/stats/today');
-  document.getElementById('dailyNum').textContent = data.total.toFixed(2);
+  if (!data || data.error) { toast((data && data.error) || 'Error cargando el resumen', 'err'); return; }
+  document.getElementById('dailyNum').textContent = num(data.total).toFixed(2);
   const cats = Object.keys(data.by_category||{});
   document.getElementById('dailySub').textContent =
     cats.length === 0
@@ -1260,8 +1332,11 @@ async function loadOwedBanner() {
     document.getElementById('owedBanner').style.display = 'none';
     return;
   }
-  const data = await api('GET', '/api/stats/dashboard');
-  const owed = data.owed_to_me || 0;
+  // Antes pedia /api/stats/dashboard COMPLETO (decenas de queries) solo para
+  // leer un numero. Ahora usa un endpoint dedicado de una sola query.
+  const data = await api('GET', '/api/stats/owed');
+  if (!data || data.error) { document.getElementById('owedBanner').style.display='none'; return; }
+  const owed = num(data.owed_to_me);
   if (owed > 0) {
     document.getElementById('owedVal').textContent = '$' + owed.toFixed(2);
     document.getElementById('owedBanner').style.display = '';
@@ -1434,8 +1509,8 @@ async function loadDashboard() {
 }
 
 function renderDashboardStats(data) {
-  document.getElementById('dashMonthTotal').textContent = '$' + data.month_total.toFixed(2);
-  document.getElementById('dashYearTotal').textContent  = '$' + data.year_total.toFixed(2);
+  document.getElementById('dashMonthTotal').textContent = '$' + num(data.month_total).toFixed(2);
+  document.getElementById('dashYearTotal').textContent  = '$' + num(data.year_total).toFixed(2);
   document.getElementById('dashMonthName').textContent  = data.current_month || '';
   document.getElementById('dashYearName').textContent   = String(data.current_year || '');
   document.getElementById('dashYearLabel').textContent  = String(data.current_year || '');
@@ -1675,6 +1750,15 @@ async function loadHistory(view) {
   const el = document.getElementById('histGroups');
   el.innerHTML = '<div style="text-align:center;padding:30px"><div class="spin"></div></div>';
   const data = await api('GET',`/api/stats/history?view=${view}`);
+  if (!data || data.error) {
+    // Antes esto lanzaba y el spinner se quedaba girando para siempre.
+    el.innerHTML = `<div class="empty-state">
+        ${(data && data.error) || 'No se pudo cargar el historial'}<br>
+        <button class="btn" style="margin-top:14px"
+                onclick="loadHistory('${view}')">Reintentar</button>
+      </div>`;
+    return;
+  }
   const groups = data.groups||[];
   if (!groups.length){ el.innerHTML='<div class="empty-state">No expenses found</div>'; return; }
   el.innerHTML = groups.map((g,i)=>{
@@ -1688,7 +1772,7 @@ async function loadHistory(view) {
       <div class="hist-grp-hdr" onclick="toggleGroup(${i})">
         <div><div class="hist-grp-lbl">${g.label} ${todayBadge}</div></div>
         <div class="hist-grp-right">
-          <span class="hist-grp-total">$${g.total.toFixed(2)}</span>
+          <span class="hist-grp-total">$${num(g.total).toFixed(2)}</span>
           <span class="hist-grp-arrow ${arrowOpen}" id="arrow-${i}">▼</span>
         </div>
       </div>

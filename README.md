@@ -64,3 +64,57 @@ To run this project locally, ensure you have Python installed.
 📄 License
 
 This project is for personal use and is not-for-profit. Feel free to fork it for your own personal hobby use.
+
+---
+
+## 📱 Correrlo en Termux (Android)
+
+```bash
+pkg install python termux-api
+pip install -r requirements.txt
+chmod +x run_termux.sh
+./run_termux.sh
+```
+
+Abre `http://127.0.0.1:5002` en el navegador del telefono.
+
+`run_termux.sh` se encarga de tres cosas que dan problemas en Android:
+
+1. **`termux-wake-lock`** — sin el, Android congela el proceso al apagar la
+   pantalla y el server "se detiene solo". Requiere `pkg install termux-api`.
+2. **Levanta el server con `waitress`** en vez del servidor de desarrollo de
+   Flask, que no aguanta horas en pie.
+3. **Reinicia el proceso** si llegara a caerse.
+
+### Variables de entorno
+
+| Variable | Default | Para que sirve |
+|---|---|---|
+| `XPNS_PORT` | `5002` | Puerto de escucha |
+| `XPNS_HOST` | `0.0.0.0` | Interfaz (usa `127.0.0.1` para no exponerlo en la red) |
+| `XPNS_THREADS` | `4` | Hilos de waitress |
+| `XPNS_HASH_METHOD` | `pbkdf2:sha256:120000` | Algoritmo de hash de contrasenas |
+
+### Diagnostico
+
+```bash
+curl http://127.0.0.1:5002/api/health
+```
+
+Responde con el estado de la BD y el `journal_mode`, que debe decir `wal`:
+
+```json
+{"status":"healthy","db":"ok","journal_mode":"wal","users":2,
+ "hash_method":"pbkdf2:sha256:120000"}
+```
+
+Si devuelve `"status":"degraded"`, el problema esta en SQLite y el detalle
+viene en el campo `detail`.
+
+### Nota sobre el primer login despues de actualizar
+
+Las contrasenas se guardaban con **scrypt**, que en un telefono tarda segundos
+y pide 32 MB de RAM por intento (esa era la causa de que el login se trabara).
+Ahora se usa pbkdf2-sha256. **No hay que volver a registrarse**: la primera vez
+que inicies sesion se valida tu hash viejo y se reescribe solo al formato nuevo.
+Ese primer login sigue siendo lento una unica vez; los siguientes son instantaneos.
