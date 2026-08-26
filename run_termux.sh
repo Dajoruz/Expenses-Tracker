@@ -113,21 +113,7 @@ fi
 # uno arrancado desde otra sesion de Termux). Si no lo liberamos, el server
 # nuevo no puede escuchar, muere al instante, y te sigue respondiendo el VIEJO
 # con los bugs. Antes eso pasaba en silencio.
-if port_busy "$PORT"; then
-  say "el puerto $PORT sigue ocupado; intento liberarlo..."
-  command -v fuser >/dev/null 2>&1 && fuser -k "$PORT/tcp" 2>/dev/null
-  sleep 2
-  if port_busy "$PORT"; then
-    say "ERROR: el puerto $PORT sigue ocupado por otro proceso."
-    say "       Ese proceso es el que te responde (probablemente codigo viejo)."
-    say "       Opciones:"
-    say "         pkg install psmisc && fuser -k $PORT/tcp"
-    say "         o usa otro puerto:  XPNS_PORT=5003 ./run_termux.sh"
-    say "         o cierra Termux del todo (deslizar en apps recientes) y reabre"
-    exit 1
-  fi
-  say "puerto liberado"
-fi
+# (la comprobacion de puerto la hace start_app via free_port_or_fail)
 
 # ── 1. Wake lock ──────────────────────────────────────────────────────────────
 if command -v termux-wake-lock >/dev/null 2>&1; then
@@ -171,22 +157,33 @@ free_port_or_fail() {
   # "OSError: [Errno 98] Address already in use" cada 15 segundos.
   port_busy "$PORT" || return 0
   say "el puerto $PORT esta ocupado; intento liberarlo..."
-  # shellcheck disable=SC2086
-  kill $(find_app_pids) 2>/dev/null; sleep 2
-  command -v fuser >/dev/null 2>&1 && fuser -k "$PORT/tcp" 2>/dev/null
-  sleep 2
-  if port_busy "$PORT"; then
-    say ""
-    say "ERROR: el puerto $PORT sigue ocupado por un proceso que no puedo matar."
-    say "       Relanzar no sirve de nada, asi que me detengo aqui."
-    say "       Prueba:"
-    say "         pkg install psmisc && fuser -k $PORT/tcp"
-    say "         XPNS_PORT=5003 ./run_termux.sh"
-    say "         o cierra Termux del todo (apps recientes) y vuelve a abrir"
-    return 1
+
+  # OJO: aqui NO se usa `fuser`. En Android falla con "Bad system call"
+  # (seccomp bloquea sus syscalls). tools/port_utils.py hace lo mismo leyendo
+  # /proc/net/tcp y los inodos de /proc/<pid>/fd, que si funciona.
+  if [ -f "$PWD/tools/port_utils.py" ]; then
+    say "dueno del puerto: $(python "$PWD/tools/port_utils.py" info "$PORT" 2>/dev/null | head -3)"
+    python "$PWD/tools/port_utils.py" kill "$PORT" 2>/dev/null | while read -r l; do say "  $l"; done
+  else
+    # shellcheck disable=SC2086
+    kill $(find_app_pids) 2>/dev/null
   fi
-  say "puerto liberado"
-  return 0
+
+  # Un server recien matado tarda un momento en soltar el socket.
+  for _ in 1 2 3 4 5 6; do
+    sleep 2
+    port_busy "$PORT" || { say "puerto liberado"; return 0; }
+  done
+
+  say ""
+  say "ERROR: el puerto $PORT sigue ocupado por un proceso que no puedo matar."
+  say "       Relanzar no sirve de nada, asi que me detengo aqui."
+  say "       Quien lo tiene:"
+  python "$PWD/tools/port_utils.py" info "$PORT" 2>/dev/null | while read -r l; do say "         $l"; done
+  say "       Prueba:"
+  say "         XPNS_PORT=5003 ./run_termux.sh"
+  say "         o cierra Termux del todo (apps recientes) y vuelve a abrir"
+  return 1
 }
 
 start_app() {
@@ -246,7 +243,8 @@ while true; do
       tail -n 25 "$LOGDIR/xpns.log" | sed 's/^/       /'
       say ""
       say "Si dice 'Address already in use': otro proceso tiene el puerto $PORT."
-      say "  pkg install psmisc && fuser -k $PORT/tcp"
+      say "  python tools/port_utils.py info $PORT   # quien lo tiene"
+      say "  python tools/port_utils.py kill $PORT   # matarlo"
       say "  o:  XPNS_PORT=5003 ./run_termux.sh"
       say "Diagnostico completo:  ./diagnose_termux.sh"
       say "=================================================================="

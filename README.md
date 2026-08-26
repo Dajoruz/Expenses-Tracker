@@ -215,3 +215,31 @@ pkill -f 'python.*expense_app_v2'
 pkg install psmisc && fuser -k 5002/tcp
 ./run_termux.sh
 ```
+
+## 📋 Un solo comando para reportar problemas
+
+```bash
+./collect_info.sh
+```
+
+Genera `xpns_info.txt` con **todo** de una vez: versiones, git, espacio, prueba
+real de lectura y escritura en la BD, procesos, quien tiene tomado el puerto,
+estado y config del tunel, logs y bateria.
+
+No se detiene aunque algo falle: si un comando revienta lo anota y sigue con el
+siguiente, asi que siempre sale el informe completo. Los tokens y credenciales
+del tunel se censuran antes de escribirlos.
+
+### `fuser` no sirve en Android
+
+En Termux `fuser` falla con **`Bad system call`** (seccomp bloquea sus syscalls)
+y `lsof`/`ss` no suelen estar instalados. Para saber quien tiene un puerto:
+
+```bash
+python tools/port_utils.py info 5002   # PID + linea de comandos
+python tools/port_utils.py kill 5002   # matarlo
+python tools/port_utils.py free 5002   # 0 = libre, 1 = ocupado
+```
+
+Lee `/proc/net/tcp` y los inodos de `/proc/<pid>/fd`, que si funciona en
+Android. `run_termux.sh` lo usa internamente.
