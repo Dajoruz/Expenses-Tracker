@@ -9,6 +9,7 @@ from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from werkzeug.security import generate_password_hash, check_password_hash
 from werkzeug.exceptions import HTTPException
 from datetime import datetime, date, timedelta
@@ -55,25 +56,55 @@ log = logging.getLogger('xpns')
 db = SQLAlchemy(app)
 
 
+# Modo de journal realmente en uso (se resuelve en la primera conexion).
+DB_JOURNAL_MODE = None
+
+
 @event.listens_for(Engine, 'connect')
 def _sqlite_pragmas(dbapi_conn, conn_record):
     """
     PRAGMAs aplicados a CADA conexion nueva.
 
-    WAL es lo importante: sin el, cualquier escritura bloquea a todos los
-    lectores y en un telefono (I/O lento) eso se siente como que la app se
-    congela y termina tirando el servidor con 'database is locked'.
+    WAL evita que una escritura bloquee a todos los lectores. PERO WAL necesita
+    memoria compartida (un archivo -shm con mmap) y eso NO funciona en el
+    almacenamiento compartido de Android (/sdcard, ~/storage/..., FUSE/exFAT):
+    ahi WAL falla y te deja una BD que se puede LEER pero no ESCRIBIR.
+    Por eso no basta con pedir WAL: hay que verificar que quedo activo y, si no,
+    volver a un modo que si funcione en ese sistema de archivos.
     """
+    global DB_JOURNAL_MODE
     try:
         cur = dbapi_conn.cursor()
-        cur.execute('PRAGMA journal_mode=WAL')
-        cur.execute('PRAGMA synchronous=NORMAL')
         cur.execute('PRAGMA busy_timeout=30000')
         cur.execute('PRAGMA foreign_keys=ON')
         cur.execute('PRAGMA temp_store=MEMORY')
+
+        mode = None
+        try:
+            cur.execute('PRAGMA journal_mode=WAL')
+            row = cur.fetchone()
+            mode = (row[0] if row else '') or ''
+        except Exception as e:
+            log.warning('no se pudo activar WAL: %s', e)
+
+        if (mode or '').lower() != 'wal':
+            # Sistema de archivos sin soporte de WAL (tipicamente /sdcard).
+            # TRUNCATE es lo mas seguro que queda y sigue siendo transaccional.
+            try:
+                cur.execute('PRAGMA journal_mode=TRUNCATE')
+                row = cur.fetchone()
+                mode = (row[0] if row else 'truncate')
+            except Exception as e:
+                log.warning('no se pudo fijar el journal: %s', e)
+            cur.execute('PRAGMA synchronous=FULL')
+        else:
+            cur.execute('PRAGMA synchronous=NORMAL')
+
+        if DB_JOURNAL_MODE is None:
+            DB_JOURNAL_MODE = (mode or 'desconocido').lower()
         cur.close()
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning('PRAGMAs no aplicados: %s', e)
 
 # ── Helpers de serializacion ─────────────────────────────────────────────────
 
@@ -268,6 +299,43 @@ with app.app_context():
         except Exception:
             pass
     log.info('DB lista: %s', app.config['SQLALCHEMY_DATABASE_URI'])
+    log.info('journal_mode en uso: %s', DB_JOURNAL_MODE)
+
+    # Auto-chequeo: escribir de verdad en la BD al arrancar.
+    # Si la BD se puede leer pero no escribir (el sintoma tipico de tenerla en
+    # /sdcard, del disco lleno o de permisos revocados por Android), es mejor
+    # gritarlo ahora en el log que descubrirlo cuando el usuario guarda un gasto.
+    DB_WRITABLE, DB_WRITE_ERROR = True, None
+    try:
+        with db.engine.connect() as _c:
+            _c.execute(text('CREATE TABLE IF NOT EXISTS _xpns_write_test (k INTEGER)'))
+            _c.execute(text('INSERT INTO _xpns_write_test (k) VALUES (1)'))
+            _c.execute(text('DROP TABLE _xpns_write_test'))
+            _c.commit()
+        log.info('escritura en la BD: OK')
+    except Exception as _e:
+        DB_WRITABLE, DB_WRITE_ERROR = False, str(_e)
+        log.error('=' * 66)
+        log.error('LA BASE DE DATOS NO ACEPTA ESCRITURAS: %s', _e)
+        log.error('Vas a poder VER los gastos viejos pero NO guardar nuevos.')
+        log.error('Causas tipicas en Termux:')
+        log.error('  - El .db esta en /sdcard o ~/storage (usa el almacenamiento')
+        log.error('    interno de Termux: ~/projects/... )')
+        log.error('  - Sin espacio libre  ->  df -h $HOME')
+        log.error('  - Permisos           ->  ls -la %s', BASE_DIR)
+        log.error('Corre ./diagnose_termux.sh para el detalle.')
+        log.error('=' * 66)
+
+    # Integridad: un apagon (bateria a 0) puede dejar la BD tocada.
+    try:
+        with db.engine.connect() as _c:
+            _r = _c.execute(text('PRAGMA quick_check')).scalar()
+        if str(_r).lower() != 'ok':
+            log.error('PRAGMA quick_check devolvio: %s (BD posiblemente danada)', _r)
+        else:
+            log.info('integridad de la BD: OK')
+    except Exception as _e:
+        log.warning('no se pudo verificar la integridad: %s', _e)
 
 # ── Manejo de errores ────────────────────────────────────────────────────────
 # El front hace `r.json()` sin red de seguridad: si Flask devolvia su pagina de
@@ -278,6 +346,48 @@ with app.app_context():
 @app.errorhandler(HTTPException)
 def _handle_http_error(e):
     return jsonify({'error': e.description, 'code': e.code}), e.code
+
+
+@app.errorhandler(OperationalError)
+def _handle_db_operational(e):
+    """
+    Errores de SQLite que en un telefono son muy comunes y que antes salian
+    como un 500 generico (o como HTML), dejando al usuario sin saber que pasa.
+    El caso mas confuso: la app deja LEER los gastos viejos pero no guardar
+    nuevos, porque la BD quedo en solo lectura.
+    """
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    msg = str(getattr(e, 'orig', e)).lower()
+    if 'readonly' in msg or 'read-only' in msg or 'attempt to write' in msg:
+        detail = ('La base de datos esta en SOLO LECTURA: puedes ver los gastos '
+                  'viejos pero no guardar nuevos. Revisa permisos y que el .db '
+                  'no este en /sdcard. Corre ./diagnose_termux.sh')
+    elif 'locked' in msg or 'busy' in msg:
+        detail = ('La base de datos esta bloqueada por otro proceso. '
+                  'Puede haber otra copia del server corriendo: pkill -f expense_app_v2.py')
+    elif 'disk i/o' in msg or 'disk image' in msg:
+        detail = ('Error de disco en SQLite. Suele pasar con la BD en /sdcard o '
+                  'tras un apagon. Corre ./diagnose_termux.sh')
+    elif 'no space' in msg or 'full' in msg:
+        detail = 'No queda espacio en el telefono. Libera espacio (df -h $HOME).'
+    else:
+        detail = f'Error de base de datos: {getattr(e, "orig", e)}'
+    log.error('SQLite en %s %s -> %s', request.method, request.path, e)
+    return jsonify({'error': detail, 'db_error': True}), 503
+
+
+@app.errorhandler(SQLAlchemyError)
+def _handle_db_generic(e):
+    try:
+        db.session.rollback()
+    except Exception:
+        pass
+    log.error('error de BD en %s %s\n%s', request.method, request.path,
+              traceback.format_exc())
+    return jsonify({'error': f'Error de base de datos: {e}', 'db_error': True}), 503
 
 
 @app.errorhandler(Exception)
@@ -1338,14 +1448,30 @@ def health():
         db.session.execute(text('SELECT 1'))
         journal = db.session.execute(text('PRAGMA journal_mode')).scalar()
         users   = db.session.query(db.func.count(User.id)).scalar()
+
+        # Prueba de escritura real: es lo que distingue "la app anda" de
+        # "la app anda pero no puedes guardar nada".
+        writable, werr = True, None
+        try:
+            db.session.execute(text('CREATE TABLE IF NOT EXISTS _xpns_write_test (k INTEGER)'))
+            db.session.execute(text('INSERT INTO _xpns_write_test (k) VALUES (1)'))
+            db.session.execute(text('DROP TABLE _xpns_write_test'))
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            writable, werr = False, str(e)
+
         return jsonify({
-            'status':       'healthy',
+            'status':       'healthy' if writable else 'read-only',
             'service':      'xpns-v3',
             'db':           'ok',
+            'db_writable':  writable,
+            'write_error':  werr,
             'journal_mode': journal,
+            'db_path':      BASE_DIR,
             'users':        users,
             'hash_method':  PASSWORD_HASH_METHOD,
-        })
+        }), (200 if writable else 503)
     except Exception as e:
         db.session.rollback()
         log.error('health check fallo: %s', e)

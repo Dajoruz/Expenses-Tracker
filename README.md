@@ -118,3 +118,62 @@ y pide 32 MB de RAM por intento (esa era la causa de que el login se trabara).
 Ahora se usa pbkdf2-sha256. **No hay que volver a registrarse**: la primera vez
 que inicies sesion se valida tu hash viejo y se reescribe solo al formato nuevo.
 Ese primer login sigue siendo lento una unica vez; los siguientes son instantaneos.
+
+## 🌐 Cloudflare Tunnel (dajorus.com)
+
+Los dos errores que ves significan cosas distintas:
+
+| Error | Que pasa | Causa |
+|---|---|---|
+| **502 Bad Gateway** | El tunel vive, pero XPNS no responde detras | El server de Python se murio |
+| **Error 1033** | Cloudflare no encuentra el tunel | `cloudflared` no esta corriendo |
+
+`run_termux.sh` vigila **los dos** procesos cada 15 s y relanza el que se caiga,
+que es lo que evita ambos errores.
+
+El `~/.cloudflared/config.yml` debe apuntar al puerto local de XPNS:
+
+```yaml
+tunnel: <id-de-tu-tunel>
+credentials-file: /data/data/com.termux/files/home/.cloudflared/<id>.json
+
+ingress:
+  - hostname: dajorus.com
+    service: http://127.0.0.1:5002   # <-- debe coincidir con XPNS_PORT
+  - service: http_status:404
+```
+
+### Lo que mas tumba esto en Android
+
+La causa numero uno no es el codigo, es la **optimizacion de bateria**: Android
+mata Termux en segundo plano y se caen el server y el tunel a la vez. Hay que
+hacer las dos cosas:
+
+1. Ajustes → Apps → Termux → Bateria → **Sin restricciones**.
+2. `pkg install termux-api` para que `termux-wake-lock` funcione.
+
+## 🩺 Diagnostico
+
+```bash
+./diagnose_termux.sh
+```
+
+Revisa dependencias, espacio en disco, si la BD se puede **escribir** (no solo
+leer), integridad tras un apagon, cuantas copias del server hay, el estado de
+`cloudflared` y el wake lock.
+
+### "Veo los gastos viejos pero no puedo guardar nuevos"
+
+Ese sintoma exacto significa que **SQLite puede leer pero no escribir**. Causas,
+en orden de probabilidad:
+
+1. **El `.db` esta en `/sdcard` o `~/storage/`.** SQLite no funciona bien en el
+   almacenamiento compartido de Android: los bloqueos y el modo WAL fallan ahi.
+   Tiene que estar en el almacenamiento interno de Termux (`~/projects/...`).
+2. **No queda espacio.** Sin espacio libre SQLite no puede escribir su journal.
+   Compruebalo con `df -h $HOME`.
+3. **Dos copias del server** peleandose por la BD.
+4. **Permisos** del archivo o de la carpeta que lo contiene.
+
+La app ahora detecta esto al arrancar y lo dice en el log en vez de fallar en
+silencio, y `/api/health` incluye `db_writable`.
