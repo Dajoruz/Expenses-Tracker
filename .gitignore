@@ -20,3 +20,5 @@ instance/
 
 #developer Tools skiped
 developerTools/
+# Informe de diagnostico generado por collect_info.sh
+xpns_info.txt
